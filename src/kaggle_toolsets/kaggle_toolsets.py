@@ -1,7 +1,7 @@
 def check_tpu():
     import os
     try:
-        if 'TPU_NAME' in os.environ:
+        if ('TPU_ACCELERATOR_TYPE' in os.environ) or ('TPU_WORKER_HOSTNAMES' in os.environ) or ('TPU_PROCESS_ADDRESSES' in os.environ):
             return True
         else:
             return False
