@@ -37,9 +37,9 @@ def run_command(command):
     subprocess.run(command, shell=True, check=True)
 
 
-def install_vllm(is_tpu = False):
+def install_vllm():
     import os
-    if is_tpu == False:
+    if check_tpu() == False:
         print("Install vllm for GPU/CPU")
         run_command("pip install uv -q")
         run_command("uv pip install https://github.com/vllm-project/vllm/releases/download/v0.24.0/vllm-0.24.0+cu129-cp38-abi3-manylinux_2_28_x86_64.whl --system  -q")
@@ -143,7 +143,7 @@ def suggest_vllm_gpu_config(prefer_all_gpus=True, max_tp=None):
         "note": "Nếu model nhỏ, TP=1 có thể latency tốt hơn; model lớn/throughput thì TP=so_gpu thường tốt hơn."
     }
 
-def start_vllm_server(model_path,model_name,is_tpu= False, tensor_parallel_size=1,max_model_len=3072, max_num_seqs=32, kv_cache_dtype='bfloat16', dtype='bfloat16', host='0.0.0.0', port=8000, distributed_executor_backend='ray', data_parallel_size=1, timeout=1800,max_num_batched_tokens=16384):
+def start_vllm_server(model_path,model_name, tensor_parallel_size=1,max_model_len=3072, max_num_seqs=32, kv_cache_dtype='bfloat16', dtype='bfloat16', host='0.0.0.0', port=8000, distributed_executor_backend='ray', data_parallel_size=1, timeout=1800,max_num_batched_tokens=16384):
     import subprocess
     import threading
     import os
@@ -153,7 +153,7 @@ def start_vllm_server(model_path,model_name,is_tpu= False, tensor_parallel_size=
     effective_distributed_executor_backend = distributed_executor_backend
     effective_dtype = dtype
     effective_kv_cache_dtype = kv_cache_dtype
-
+    is_tpu = check_tpu()
     if is_tpu:
         print("Use TPU to validate")
         os.environ['MODEL_IMPL_TYPE'] = 'vllm'
