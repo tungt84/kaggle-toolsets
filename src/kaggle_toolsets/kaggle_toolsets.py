@@ -52,7 +52,7 @@ def install_vllm():
         # Cài đặt uv và gỡ các thư viện cũ
         run_command("pip install uv -q")
         run_command("pip uninstall jax jaxlib libtpu torch torchvision torchaudio -y -q")
-        
+        run_command("rm -rf vllm")
         # Clone repository
         run_command("git clone --branch releases/v0.19.0 https://github.com/vllm-project/vllm.git")
         
