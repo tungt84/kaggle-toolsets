@@ -1,3 +1,16 @@
+def check_tpu():
+    try:
+        # Lưu ý: Kaggle TPU thường đã cài sẵn torch_xla, nếu chưa bạn có thể phải cài bằng !pip install torch_xla
+        import torch
+        import torch_xla
+        import torch_xla.core.xla_model as xm
+        # Lấy thiết bị XLA (TPU)
+        device = xm.xla_device()
+        if device.type == 'xla':
+            return True
+    except Exception as e:
+        return False
+    return False
 
 def check_dataset(tag,dataset_name,default_path=None):
     import os
