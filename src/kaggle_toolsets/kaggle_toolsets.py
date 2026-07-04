@@ -201,7 +201,6 @@ def _start_vllm_server_core(
         else:
             cmd.append("--gpu-memory-utilization")
             cmd.append("0.8")
-            cmd.append("--disable-chunked-prefill")
             cmd.append("--block-size")
             cmd.append("16")
             import os
