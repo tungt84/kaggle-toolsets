@@ -203,8 +203,8 @@ def _start_vllm_server_core(
             cmd.append("0.8")
             cmd.append("--block-size")
             cmd.append("16")
-            import os
-            os.environ["VLLM_USE_V1"] = "1"
+            #import os
+            #os.environ["VLLM_USE_V1"] = "1"
 
 
         if data_parallel_size and data_parallel_size > 1:
