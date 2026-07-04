@@ -1,3 +1,6 @@
+import os
+
+
 def check_tpu():
     import os
     try:
@@ -143,115 +146,213 @@ def suggest_vllm_gpu_config(prefer_all_gpus=True, max_tp=None):
         "note": "Nếu model nhỏ, TP=1 có thể latency tốt hơn; model lớn/throughput thì TP=so_gpu thường tốt hơn."
     }
 
-def start_vllm_server(model_path,model_name, tensor_parallel_size=1,max_model_len=3072, max_num_seqs=32, kv_cache_dtype='bfloat16', dtype='bfloat16', host='0.0.0.0', port=8000, distributed_executor_backend='ray', data_parallel_size=1, timeout=1800,max_num_batched_tokens=16384):
+def _start_vllm_server_core(
+    model_path,
+    model_name,
+    tensor_parallel_size=1,
+    max_model_len=3072,
+    max_num_seqs=32,
+    kv_cache_dtype="bfloat16",
+    dtype="bfloat16",
+    host="0.0.0.0",
+    port=8000,
+    distributed_executor_backend="ray",
+    data_parallel_size=1,
+    timeout=1800,
+    max_num_batched_tokens=16384,
+    is_tpu=False,
+):
     import subprocess
     import threading
-    import os
     import time
 
-    effective_tensor_parallel_size = tensor_parallel_size
-    effective_distributed_executor_backend = distributed_executor_backend
-    effective_dtype = dtype
-    effective_kv_cache_dtype = kv_cache_dtype
-    is_tpu = check_tpu()
-    if is_tpu:
-        print("Use TPU to validate")
-        os.environ['MODEL_IMPL_TYPE'] = 'vllm'
-        os.environ['USE_BATCHED_RPA_KERNEL'] = '1'
-        os.environ['SKIP_JAX_PRECOMPILE'] = '0'
-        os.environ['TPU_MULTIHOST_BACKEND'] = 'ray'
-        os.environ['RAY_memory_monitor_refresh_ms'] = '0'
-        os.environ['VLLM_XLA_CHECK_RECOMPILATION'] = '0'
-        os.environ['JAX_PLATFORMS'] = 'tpu,cpu'
-        os.environ['VLLM_ALLOW_LONG_MAX_MODEL_LEN'] = '1'
-    else:
-        print("Use GPU/CPU to validate")
-        cfg = suggest_vllm_gpu_config(prefer_all_gpus=True)
-        for k, v in cfg["env"].items():
-            os.environ[k] = v
-        effective_tensor_parallel_size = cfg["start_args"]["tensor_parallel_size"]
-        effective_distributed_executor_backend = cfg["start_args"]["distributed_executor_backend"]
-        effective_dtype = cfg["start_args"]["dtype"]
-        effective_kv_cache_dtype = cfg["start_args"]["kv_cache_dtype"]
-
-    
-
-    
-    
-
-    def start_server(is_tpu = False,tensor_parallel_size=1,max_model_len=3072, max_num_seqs=32, kv_cache_dtype='bfloat16', dtype='bfloat16', port=8000, served_model_name=model_name, distributed_executor_backend='ray', data_parallel_size=1,max_num_batched_tokens=16384):
+    def start_server():
         cmd = [
-            'vllm', 'serve',
+            "vllm",
+            "serve",
             model_path,
-            '--tensor-parallel-size', str(tensor_parallel_size),
-            '--max-model-len', str(max_model_len),
-            '--max-num-seqs', str(max_num_seqs),
-            '--dtype', dtype,
-            '--kv-cache-dtype', kv_cache_dtype,
-            '--enable-chunked-prefill',
-            '--no-enable-prefix-caching',
-            '--trust-remote-code',
-            '--host', '0.0.0.0',
-            '--port', str(port),
-            '--served-model-name', served_model_name,
-            '--distributed-executor-backend', distributed_executor_backend,
+            "--tensor-parallel-size",
+            str(tensor_parallel_size),
+            "--max-model-len",
+            str(max_model_len),
+            "--max-num-seqs",
+            str(max_num_seqs),
+            "--dtype",
+            dtype,
+            "--kv-cache-dtype",
+            kv_cache_dtype,
+            "--no-enable-prefix-caching",
+            "--trust-remote-code",
+            "--host",
+            host,
+            "--port",
+            str(port),
+            "--served-model-name",
+            model_name,
+            "--distributed-executor-backend",
+            distributed_executor_backend,
         ]
-        #Nguyên nhân sâu xa là do các GPU T4 trên Kaggle kết nối với nhau qua giao thức PCIe (không có kết nối tốc độ cao NVLink), điều này khiến việc chụp đồ thị CUDA (CUDA Graph Capture) kết hợp với các phép toán chia sẻ bộ nhớ của NCCL/vLLM bị lỗi invalid argument
-        
-        if is_tpu == False:
+
+        # Kaggle T4 multi-GPU thường ổn định hơn với eager mode
+        if not is_tpu:
             cmd.append("--enforce-eager")
-        
+            cmd.append("--enable-chunked-prefill")
+
+        else:
+            cmd.append("--gpu-memory-utilization")
+            cmd.append("0.8")
+            cmd.append("--enable-chunked-prefill")
+            cmd.append("False")
+            cmd.append("--block-size")
+            cmd.append("16")
+            import os
+            os.environ["VLLM_USE_V1"] = "1"
+
+
         if data_parallel_size and data_parallel_size > 1:
-            cmd.extend(['--data-parallel-size', str(data_parallel_size)])
+            cmd.extend(["--data-parallel-size", str(data_parallel_size)])
 
         if max_num_batched_tokens and max_num_batched_tokens > 0:
-            cmd.extend(['--max-num-batched-tokens', str(max_num_batched_tokens)])
+            cmd.extend(["--max-num-batched-tokens", str(max_num_batched_tokens)])
 
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1
+            bufsize=1,
         )
 
         def stream_output():
-            for line in iter(process.stdout.readline, ''):
-                print(f"[SERVER] {line}", end='')
+            for line in iter(process.stdout.readline, ""):
+                print(f"[SERVER] {line}", end="")
 
         threading.Thread(target=stream_output, daemon=True).start()
         return process
 
-    def wait_for_server(host="localhost", port=8000, timeout=1800):
-        """Poll health endpoint until server is ready."""
+    def wait_for_server():
         import requests
+
         start = time.time()
         while time.time() - start < timeout:
             try:
                 r = requests.get(f"http://{host}:{port}/health", timeout=5)
                 if r.status_code == 200:
-                    print(f"\n✓ Server ready after {int(time.time()-start)}s")
+                    print(f"\nServer ready after {int(time.time() - start)}s")
                     return True
             except Exception:
                 pass
+
             time.sleep(5)
-            if int(time.time()-start) % 60 == 0:
-                print(f"Waiting for server... {int(time.time()-start)}s elapsed")
+            elapsed = int(time.time() - start)
+            if elapsed > 0 and elapsed % 60 == 0:
+                print(f"Waiting for server... {elapsed}s elapsed")
+
         raise TimeoutError("Server failed to start")
 
-    server_proc = start_server(
-        tensor_parallel_size=effective_tensor_parallel_size,
+    server_proc = start_server()
+    print("Starting vLLM server and waiting for /health ...")
+    wait_for_server()
+    return server_proc
+
+
+def start_vllm_server_with_tpu(
+    model_path,
+    model_name,
+    tensor_parallel_size=1,
+    max_model_len=3072,
+    max_num_seqs=32,
+    kv_cache_dtype="bfloat16",
+    dtype="bfloat16",
+    host="0.0.0.0",
+    port=8000,
+    distributed_executor_backend="ray",
+    data_parallel_size=1,
+    timeout=1800,
+    max_num_batched_tokens=16384,
+):
+    import os
+
+    print("Use TPU to validate")
+    os.environ["MODEL_IMPL_TYPE"] = "vllm"
+    os.environ["USE_BATCHED_RPA_KERNEL"] = "1"
+    os.environ["SKIP_JAX_PRECOMPILE"] = "0"
+    os.environ["TPU_MULTIHOST_BACKEND"] = "ray"
+    os.environ["RAY_memory_monitor_refresh_ms"] = "0"
+    os.environ["VLLM_XLA_CHECK_RECOMPILATION"] = "0"
+    os.environ["JAX_PLATFORMS"] = "tpu,cpu"
+    os.environ["VLLM_ALLOW_LONG_MAX_MODEL_LEN"] = "1"
+
+    return _start_vllm_server_core(
+        model_path=model_path,
+        model_name=model_name,
+        tensor_parallel_size=tensor_parallel_size,
         max_model_len=max_model_len,
         max_num_seqs=max_num_seqs,
-        kv_cache_dtype=effective_kv_cache_dtype,
-        dtype=effective_dtype,
+        kv_cache_dtype=kv_cache_dtype,
+        dtype=dtype,
+        host=host,
         port=port,
-        served_model_name=model_name,
-        distributed_executor_backend=effective_distributed_executor_backend,
+        distributed_executor_backend=distributed_executor_backend,
         data_parallel_size=data_parallel_size,
-        is_tpu=is_tpu,
-        max_num_batched_tokens=max_num_batched_tokens
+        timeout=timeout,
+        max_num_batched_tokens=max_num_batched_tokens,
+        is_tpu=True,
     )
-    print("Starting vLLM server and waiting for /health ...")
-    wait_for_server(host="localhost", port=port, timeout=timeout)
-    return server_proc
+
+
+def start_vllm_server(
+    model_path,
+    model_name,
+    tensor_parallel_size=1,
+    max_model_len=3072,
+    max_num_seqs=32,
+    kv_cache_dtype="bfloat16",
+    dtype="bfloat16",
+    host="0.0.0.0",
+    port=8000,
+    distributed_executor_backend="ray",
+    data_parallel_size=1,
+    timeout=1800,
+    max_num_batched_tokens=16384,
+):
+    import os
+
+    if check_tpu():
+        return start_vllm_server_with_tpu(
+            model_path=model_path,
+            model_name=model_name,
+            tensor_parallel_size=tensor_parallel_size,
+            max_model_len=max_model_len,
+            max_num_seqs=max_num_seqs,
+            kv_cache_dtype=kv_cache_dtype,
+            dtype=dtype,
+            host=host,
+            port=port,
+            distributed_executor_backend=distributed_executor_backend,
+            data_parallel_size=data_parallel_size,
+            timeout=timeout,
+            max_num_batched_tokens=max_num_batched_tokens,
+        )
+
+    print("Use GPU/CPU to validate")
+    cfg = suggest_vllm_gpu_config(prefer_all_gpus=True)
+    for k, v in cfg["env"].items():
+        os.environ[k] = v
+
+    return _start_vllm_server_core(
+        model_path=model_path,
+        model_name=model_name,
+        tensor_parallel_size=cfg["start_args"]["tensor_parallel_size"],
+        max_model_len=max_model_len,
+        max_num_seqs=max_num_seqs,
+        kv_cache_dtype=cfg["start_args"]["kv_cache_dtype"],
+        dtype=cfg["start_args"]["dtype"],
+        host=host,
+        port=port,
+        distributed_executor_backend=cfg["start_args"]["distributed_executor_backend"],
+        data_parallel_size=data_parallel_size,
+        timeout=timeout,
+        max_num_batched_tokens=max_num_batched_tokens,
+        is_tpu=False,
+    )
