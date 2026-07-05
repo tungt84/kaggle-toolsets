@@ -237,9 +237,9 @@ def start_vllm_with_gpu(model_path,model_name,cfg=None):
     cmd = cfg["start_args"]
     start_vllm_server_score(cmd)
 
-def start_vllm_server(model_path,model_name):
+def start_vllm_server(model_path,model_name,cfg=None):
     import os
     if check_tpu():
-        start_vllm_with_tpu(model_path,model_name)
+        start_vllm_with_tpu(model_path,model_name,cfg)
     else:
-        start_vllm_with_gpu(model_path,model_name)
+        start_vllm_with_gpu(model_path,model_name,cfg)
