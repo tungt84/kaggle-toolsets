@@ -1,10 +1,14 @@
 def suggest_vllm_tpu_config(model_path,model_name):
 
     env = {
-        "CUDA_VISIBLE_DEVICES": ",".join(str(i) for i in range(use_n)),
-        "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
-        "NCCL_DEBUG": "WARN",
-        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        "MODEL_IMPL_TYPE": "vllm",
+        "USE_BATCHED_RPA_KERNEL": "1",
+        "SKIP_JAX_PRECOMPILE": "0",
+        "TPU_MULTIHOST_BACKEND": "ray",
+        "RAY_memory_monitor_refresh_ms": "0",
+        "VLLM_XLA_CHECK_RECOMPILATION": "0",
+        "JAX_PLATFORMS": "tpu,cpu",
+        "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1"
     }
 
     start_args = [
