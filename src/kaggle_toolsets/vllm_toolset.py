@@ -217,7 +217,10 @@ def suggest_vllm_gpu_config(model_path,model_name,prefer_all_gpus=True, max_tp=N
             "--served-model-name",model_name,
             "--distributed-executor-backend","mp",
             "--gpu-memory-utilization", "0.8",
-            "--block-size", "16"
+            "--block-size", "16",
+            "--enforce-eager",
+            "--enable-chunked-prefill",
+            '--max-num-batched-tokens', '16384'
         ]
 
     return {
