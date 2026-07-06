@@ -17,3 +17,11 @@ def install_langgraph_openai():
     Install the langgraph-openai package using pip.
     """
     run_command("pip install langchain-openai -q")
+
+def install_langgraph_bundle():
+    """
+    Install the langgraph-bundle package using pip.
+    """
+    install_langgraph()
+    install_langgraph_openai()
+    run_command("pip install pydantic -q")
