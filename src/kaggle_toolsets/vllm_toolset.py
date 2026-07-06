@@ -83,12 +83,10 @@ def suggest_vllm_tpu_config(model_path,model_name):
         'vllm', 'serve',
         model_path,
         '--tensor-parallel-size', '4',
-        '--max-model-len', '3072',
+        '--max-model-len', '4096',
         '--max-num-seqs', '16',
         # 2. Khai báo cứng block-size là 16 (phù hợp với cấp số nhân của TPU)
         '--block-size', '16', 
-        # 3. Ép chạy chế độ eager để tránh lỗi biên dịch đồ thị (Graph Compilation) của Ray trên TPU
-        '--enforce-eager', 
         '--dtype', 'bfloat16',
         '--kv-cache-dtype', 'bfloat16',
         '--no-enable-prefix-caching',
