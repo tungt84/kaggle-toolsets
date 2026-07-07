@@ -503,7 +503,17 @@ if __name__ == "__main__":
     
     final_output = app.invoke(initial_state)
     
-    print("\n📋 KẾT QUẢ CUỐI CÙNG (CÁC MỤC BACKLOG ĐỦ MỊN):")
-    for nid, node in final_output["tree_store"].items():
-        if node["status"] == "READY":
-            print(f"- [{nid}] (Depth {node.get('depth')}): {node['short_title']} -> {node['content'][:60]}...")
+    def print_tree(tree_store, node_id="1", indent=""):
+        node = tree_store.get(node_id)
+        if not node:
+            return
+        
+        status_icon = "✅" if node['status'] == 'READY' else "🧩"
+        print(f"{indent}{status_icon} [{node['id']}] (Depth {node.get('depth', 0)}) {node['short_title']}")
+        
+        if node["children_ids"]:
+            for child_id in node["children_ids"]:
+                print_tree(tree_store, child_id, indent + "  ")
+
+    print("\n📋 KẾT QUẢ CUỐI CÙNG (CẤU TRÚC CÂY YÊU CẦU):")
+    print_tree(final_output["tree_store"])
