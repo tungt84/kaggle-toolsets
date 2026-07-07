@@ -93,12 +93,12 @@ def evaluate_layer_node(state: TreeBacklogState) -> Dict:
 
     print(f"\n[INFO] Evaluate layer với {len(active_ids)} node, batch_size={batch_size}")
 
-    # Batch scoring prompt: input là 1 JSON string chứa list nodes
+    # Batch scoring prompt: input is a JSON string containing a list of nodes
     batch_prompt = ChatPromptTemplate.from_messages([
         ("system", (
-            "Ban la bo cham diem backlog item cho team ky thuat.\n"
-            "Tra ve DUY NHAT JSON array hop le, khong markdown, khong giai thich.\n"
-            "Moi phan tu trong array co schema:\n"
+            "You are a backlog item scoring engine for a software engineering team.\n"
+            "Return ONLY a valid JSON array, no markdown, no explanations.\n"
+            "Each array item must follow this schema:\n"
             "{{\n"
             "  \"id\": str,\n"
             "  \"scope_breadth\": int,        # 0-4\n"
@@ -108,19 +108,19 @@ def evaluate_layer_node(state: TreeBacklogState) -> Dict:
             "  \"estimated_subtasks\": int,   # 1-8\n"
             "  \"confidence\": float          # 0.0-1.0\n"
             "}}\n"
-            "Quy tac: phai co 1 phan tu output cho moi node input, giu nguyen id."
+            "Rules: return exactly one output item per input node and preserve each id."
         )),
         ("user", (
-            "--- NODES CAN DANH GIA (JSON ARRAY) ---\n{nodes_json}\n\n"
-            "Hay tra ve JSON array dung schema."
+            "--- NODES TO EVALUATE (JSON ARRAY) ---\n{nodes_json}\n\n"
+            "Return a JSON array that strictly follows the schema."
         ))
     ])
 
-    # Single fallback prompt: dung khi batch parse loi
+    # Single fallback prompt: used when batch parsing fails
     single_prompt = ChatPromptTemplate.from_messages([
         ("system", (
-            "Ban la bo cham diem backlog item cho team ky thuat.\n"
-            "Tra ve DUY NHAT 1 JSON object hop le, khong markdown, khong giai thich.\n"
+            "You are a backlog item scoring engine for a software engineering team.\n"
+            "Return ONLY one valid JSON object, no markdown, no explanations.\n"
             "Schema:\n"
             "{{\n"
             "  \"scope_breadth\": int,\n"
@@ -133,7 +133,7 @@ def evaluate_layer_node(state: TreeBacklogState) -> Dict:
         )),
         ("user", (
             "--- CONTEXT ---\n{context}\n\n"
-            "--- NODE ---\nID: {node_id}\nNoi dung: {content}\n"
+            "--- NODE ---\nID: {node_id}\nContent: {content}\n"
         ))
     ])
 
@@ -274,43 +274,44 @@ def decompose_layer_node(state: TreeBacklogState) -> Dict:
 
     batch_prompt = ChatPromptTemplate.from_messages([
         ("system", (
-            "Ban la Business Analyst.\n"
-            "Tra ve DUY NHAT JSON array hop le, khong markdown, khong giai thich.\n"
-            "Moi phan tu output ung voi 1 node input theo id, schema:\n"
+            "You are a Business Analyst.\n"
+            "Return ONLY a valid JSON array, no markdown, no explanations.\n"
+            "Each output item must correspond to one input node by id, using this schema:\n"
             "{{\n"
             "  \"id\": str,\n"
             "  \"children\": [\n"
             "    {{\"short_title\": str, \"content\": str}}\n"
             "  ]\n"
             "}}\n"
-            "Rang buoc:\n"
-            "- Phai co output cho moi id trong input.\n"
-            "- Children la cac yeu cau con truc tiep.\n"
-            "- So children it nhat la 2.\n"
-            "- So children toi da la {max_n}.\n"
-            "- Neu khong tach duoc, tra children la [] cho id do."
+            "Constraints:\n"
+            "- You must return one output item for each input id.\n"
+            "- children must be direct child requirements.\n"
+            "- Minimum number of children is 2.\n"
+            "- Maximum number of children is {max_n}.\n"
+            "- If decomposition is not possible, return children as [] for that id."
         )),
         ("user", (
-            "--- NODES CAN CHIA NHO (JSON ARRAY) ---\n{nodes_json}\n\n"
-            "Hay tra ve JSON array dung schema."
+            "--- NODES TO DECOMPOSE (JSON ARRAY) ---\n{nodes_json}\n\n"
+            "Return a JSON array that strictly follows the schema."
         ))
     ])
 
     single_prompt = ChatPromptTemplate.from_messages([
         ("system", (
-            "Ban la Business Analyst.\n"
-            "Tra ve DUY NHAT JSON array hop le, khong markdown, khong giai thich.\n"
-            "Schema moi phan tu:\n"
+            "You are a Business Analyst.\n"
+            "Return ONLY a valid JSON array, no markdown, no explanations.\n"
+            "Each item schema:\n"
             "{{\"short_title\": str, \"content\": str}}\n"
-            "So phan tu toi da la {max_n}."
+            "Constraints:\n"
+            "- Maximum number of items is {max_n}.\n"
+            "- Minimum number of children is 2.\n" 
         )),
         ("user", (
-            "--- BAN DO NGU CANH CHA ---\n{context}\n\n"
-            "--- YEU CAU CAN CHIA NHO ---\nNoi dung: {content}\n\n"
-            "Hay tach thanh cac yeu cau con truc tiep."
+            "--- PARENT CONTEXT MAP ---\n{context}\n\n"
+            "--- REQUIREMENT TO DECOMPOSE ---\nContent: {content}\n\n"
+            "Decompose this into direct child requirements."
         ))
     ])
-
     batch_chain = batch_prompt | llm | JsonOutputParser()
     single_chain = single_prompt | llm | JsonOutputParser()
 
