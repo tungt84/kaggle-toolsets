@@ -478,8 +478,8 @@ if __name__ == "__main__":
         "1": RequirementNode(
             id="1",
             parent_id=None,
-            short_title="Hệ thống E-Commerce",
-            content="Xây dựng một hệ thống thương mại điện tử hoàn chỉnh cho phép người dùng xem sản phẩm, thêm vào giỏ hàng, thực hiện thanh toán trực tuyến qua thẻ tín dụng và theo dõi tình trạng đơn hàng trong trang cá nhân.",
+            short_title="E-Commerce System",
+            content="Build a complete e-commerce system that allows users to view products, add them to their shopping cart, make online payments via credit card, and track order status on their personal page.",
             context_path=[],
             status="PENDING",
             children_ids=[],
