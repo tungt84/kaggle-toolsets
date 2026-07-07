@@ -35,16 +35,35 @@ def get_compact_context(context_path: List[Dict]) -> str:
 # ==========================================
 # 2. CÁC NODE XỬ LÝ (CHỈNH SỬA SỰ CỐ STATE)
 # ==========================================
+"""
+Đề xuất khung định lượng
 
+Bắt LLM trả JSON scorecard thay vì nhãn nhị phân:
+scope_breadth: 0-4 (độ rộng phạm vi)
+dependency_count: 0-4 (mức phụ thuộc hệ thống khác)
+ambiguity: 0-4 (mức mơ hồ đầu vào/đầu ra)
+testability: 0-4 (khả năng viết test độc lập, càng cao càng “READY”)
+estimated_subtasks: 1-8
+confidence: 0.0-1.0
+Tính điểm tách bằng công thức cố định:
+split_score=scope_breadth+dependency_count+ambiguity+(4−testability)
+Rule quyết định (deterministic):
+
+Nếu depth >= max_tree_depth: READY (giữ như hiện tại)
+Nếu estimated_subtasks >= 3: NEED_SPLIT
+Hoặc nếu split_score >= 8: NEED_SPLIT
+Hoặc nếu confidence < 0.6: NEED_SPLIT
+Ngược lại: READY
+"""
 def evaluate_layer_node(state: TreeBacklogState) -> Dict:
     tree_store = dict(state["tree_store"])
     active_ids = state["active_node_ids"]
     max_depth = state.get("max_tree_depth", 3)
-
+    
     # Deterministic thresholds (có thể đưa ra config nếu muốn tuning)
-    split_score_threshold = 8
-    min_confidence_threshold = 0.6
-    subtask_threshold = 3
+    split_score_threshold = state.get("split_score_threshold", 8)
+    min_confidence_threshold = state.get("min_confidence_threshold", 0.6)
+    subtask_threshold = state.get("subtask_threshold", 3)
 
     print(f"\n[INFO] Đang đánh giá Layer gồm các Node: {active_ids}")
 
@@ -53,14 +72,14 @@ def evaluate_layer_node(state: TreeBacklogState) -> Dict:
             "Bạn là bộ chấm điểm backlog item cho team kỹ thuật.\n"
             "Phải trả về DUY NHẤT 1 JSON object hợp lệ, không markdown, không giải thích.\n"
             "Schema bắt buộc:\n"
-            "{\n"
+            "{{\n"
             "  \"scope_breadth\": int,        # 0-4 (0 rất hẹp, 4 rất rộng)\n"
             "  \"dependency_count\": int,     # 0-4 (0 độc lập, 4 phụ thuộc nhiều)\n"
             "  \"ambiguity\": int,            # 0-4 (0 rõ ràng, 4 mơ hồ)\n"
             "  \"testability\": int,          # 0-4 (0 khó test độc lập, 4 dễ test)\n"
             "  \"estimated_subtasks\": int,   # 1-8\n"
             "  \"confidence\": float          # 0.0-1.0\n"
-            "}\n"
+            "}}\n"
             "Nguyên tắc chấm: ưu tiên thực dụng để triển khai coding ngay."
         )),
         ("user", (
@@ -267,11 +286,15 @@ if __name__ == "__main__":
         )
     }
     
+    
     initial_state = TreeBacklogState(
         tree_store=initial_tree,
         active_node_ids=["1"],
-        max_children_n=3,     
-        max_tree_depth=2      # Giới hạn 2 tầng để chạy siêu tốc
+        max_children_n=10,     
+        max_tree_depth=10,
+        split_score_threshold = 8,
+        min_confidence_threshold = 0.6,
+        subtask_threshold = 3
     )
     
     final_output = app.invoke(initial_state)
