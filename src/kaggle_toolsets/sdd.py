@@ -88,6 +88,8 @@ def evaluate_layer_node(state: TreeBacklogState) -> Dict:
     min_confidence_threshold = state.get("min_confidence_threshold", 0.5)
     subtask_threshold = state.get("subtask_threshold", 4)
     batch_size = max(1, int(state.get("batch_size", 5)))
+    hard_split_score_threshold = state.get("hard_split_score_threshold", 10)
+    hard_subtask_threshold = state.get("hard_subtask_threshold", 6)
 
     print(f"\n[INFO] Evaluate layer với {len(active_ids)} node, batch_size={batch_size}")
 
@@ -167,17 +169,28 @@ def evaluate_layer_node(state: TreeBacklogState) -> Dict:
 
         split_score = scope_breadth + dependency_count + ambiguity + (4 - testability)
 
-        should_split = (
-            estimated_subtasks >= subtask_threshold
-            or split_score >= split_score_threshold
-            or confidence < min_confidence_threshold
+        # Soft signals
+        signal_subtasks = estimated_subtasks >= subtask_threshold
+        signal_score = split_score >= split_score_threshold
+        signal_low_conf = confidence < min_confidence_threshold
+        signal_count = int(signal_subtasks) + int(signal_score) + int(signal_low_conf)
+
+        # Hard split: đủ mạnh thì tách ngay
+        hard_split = (
+            split_score >= hard_split_score_threshold
+            or (estimated_subtasks >= hard_subtask_threshold and confidence >= min_confidence_threshold)
         )
+
+        # Quyết định cuối
+        should_split = hard_split or (signal_count >= 2)
 
         node["status"] = "NEED_SPLIT" if should_split else "READY"
 
         print(
             f"  -> Node {node_id}: status={node['status']} | "
             f"split_score={split_score}, subtasks={estimated_subtasks}, conf={confidence:.2f}, "
+            f"signals(subtasks={signal_subtasks}, score={signal_score}, low_conf={signal_low_conf}, count={signal_count}), "
+            f"hard_split={hard_split}, "
             f"s={scope_breadth}, d={dependency_count}, a={ambiguity}, t={testability}"
         )
 
@@ -478,10 +491,12 @@ if __name__ == "__main__":
         active_node_ids=["1"],
         max_children_n=10,     
         max_tree_depth=10,
-        split_score_threshold = 8,
-        min_confidence_threshold = 0.6,
-        subtask_threshold = 3,
-        batch_size = 5
+        split_score_threshold = 9,
+        min_confidence_threshold = 0.5,
+        subtask_threshold = 4,
+        batch_size = 5,
+        hard_split_score_threshold = 10,
+        hard_subtask_threshold = 6
     )
     
     final_output = app.invoke(initial_state)
