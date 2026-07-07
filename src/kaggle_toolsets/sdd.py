@@ -87,34 +87,10 @@ def evaluate_layer_node(state: TreeBacklogState) -> Dict:
     split_score_threshold = state.get("split_score_threshold", 9)
     min_confidence_threshold = state.get("min_confidence_threshold", 0.5)
     subtask_threshold = state.get("subtask_threshold", 4)
-    batch_size = max(1, int(state.get("batch_size", 5)))
     hard_split_score_threshold = state.get("hard_split_score_threshold", 10)
     hard_subtask_threshold = state.get("hard_subtask_threshold", 6)
 
-    print(f"\n[INFO] Evaluate layer với {len(active_ids)} node, batch_size={batch_size}")
-
-    # Batch scoring prompt: input is a JSON string containing a list of nodes
-    batch_prompt = ChatPromptTemplate.from_messages([
-        ("system", (
-            "You are a backlog item scoring engine for a software engineering team.\n"
-            "Return ONLY a valid JSON array, no markdown, no explanations.\n"
-            "Each array item must follow this schema:\n"
-            "{{\n"
-            "  \"id\": str,\n"
-            "  \"scope_breadth\": int,        # 0-4\n"
-            "  \"dependency_count\": int,     # 0-4\n"
-            "  \"ambiguity\": int,            # 0-4\n"
-            "  \"testability\": int,          # 0-4\n"
-            "  \"estimated_subtasks\": int,   # 1-8\n"
-            "  \"confidence\": float          # 0.0-1.0\n"
-            "}}\n"
-            "Rules: return exactly one output item per input node and preserve each id."
-        )),
-        ("user", (
-            "--- NODES TO EVALUATE (JSON ARRAY) ---\n{nodes_json}\n\n"
-            "Return a JSON array that strictly follows the schema."
-        ))
-    ])
+    print(f"\n[INFO] Evaluate layer với {len(active_ids)} node.")
 
     # Single fallback prompt: used when batch parsing fails
     single_prompt = ChatPromptTemplate.from_messages([
@@ -137,7 +113,6 @@ def evaluate_layer_node(state: TreeBacklogState) -> Dict:
         ))
     ])
 
-    batch_chain = batch_prompt | llm | JsonOutputParser()
     single_chain = single_prompt | llm | JsonOutputParser()
 
     def _to_int(value, default, low, high):
@@ -154,59 +129,6 @@ def evaluate_layer_node(state: TreeBacklogState) -> Dict:
             v = default
         return max(low, min(high, v))
 
-    def _apply_score(node_id: str, node: RequirementNode, raw: Dict) -> None:
-        if not isinstance(raw, dict):
-            node["status"] = "NEED_SPLIT"
-            print(f"  -> ⚠️ Node {node_id}: raw khong phai object => NEED_SPLIT")
-            return
-
-        scope_breadth = _to_int(raw.get("scope_breadth"), default=4, low=0, high=4)
-        dependency_count = _to_int(raw.get("dependency_count"), default=4, low=0, high=4)
-        ambiguity = _to_int(raw.get("ambiguity"), default=4, low=0, high=4)
-        testability = _to_int(raw.get("testability"), default=0, low=0, high=4)
-        estimated_subtasks = _to_int(raw.get("estimated_subtasks"), default=4, low=1, high=8)
-        confidence = _to_float(raw.get("confidence"), default=0.0, low=0.0, high=1.0)
-
-        split_score = scope_breadth + dependency_count + ambiguity + (4 - testability)
-
-        # Soft signals
-        signal_subtasks = estimated_subtasks >= subtask_threshold
-        signal_score = split_score >= split_score_threshold
-        signal_low_conf = confidence < min_confidence_threshold
-        signal_count = int(signal_subtasks) + int(signal_score) + int(signal_low_conf)
-
-        # Hard split: đủ mạnh thì tách ngay
-        hard_split = (
-            split_score >= hard_split_score_threshold
-            or (estimated_subtasks >= hard_subtask_threshold and confidence >= min_confidence_threshold)
-        )
-
-        # Quyết định cuối
-        should_split = hard_split or (signal_count >= 2)
-
-        node["status"] = "NEED_SPLIT" if should_split else "READY"
-
-        print(
-            f"  -> Node {node_id}: status={node['status']} | "
-            f"split_score={split_score}, subtasks={estimated_subtasks}, conf={confidence:.2f}, "
-            f"signals(subtasks={signal_subtasks}, score={signal_score}, low_conf={signal_low_conf}, count={signal_count}), "
-            f"hard_split={hard_split}, "
-            f"s={scope_breadth}, d={dependency_count}, a={ambiguity}, t={testability}"
-        )
-
-    def _evaluate_single(node_id: str, node: RequirementNode) -> None:
-        context_str = get_compact_context(node["context_path"])
-        try:
-            raw = single_chain.invoke({
-                "context": context_str,
-                "node_id": node_id,
-                "content": node["content"],
-            })
-            _apply_score(node_id, node, raw)
-        except Exception as e:
-            node["status"] = "NEED_SPLIT"
-            print(f"  -> ⚠️ Node {node_id}: single fallback loi ({str(e)}) => NEED_SPLIT")
-
     # Loc cac node can evaluate
     candidates = []
     for node_id in active_ids:
@@ -222,44 +144,54 @@ def evaluate_layer_node(state: TreeBacklogState) -> Dict:
     if not candidates:
         return {"tree_store": tree_store}
 
-    # Chay batch
-    for i in range(0, len(candidates), batch_size):
-        batch = candidates[i:i + batch_size]
-
-        payload = []
-        for node_id, node in batch:
-            payload.append({
-                "id": node_id,
-                "context": get_compact_context(node["context_path"]),
+    # Chạy từng node một
+    for node_id, node in candidates:
+        context_str = get_compact_context(node["context_path"])
+        try:
+            raw = single_chain.invoke({
+                "context": context_str,
+                "node_id": node_id,
                 "content": node["content"],
             })
 
-        try:
-            raw_batch = batch_chain.invoke({
-                "nodes_json": json.dumps(payload, ensure_ascii=False)
-            })
+            if not isinstance(raw, dict):
+                raise ValueError("LLM output khong phai object")
 
-            if not isinstance(raw_batch, list):
-                raise ValueError("Batch output khong phai JSON array")
+            scope_breadth = _to_int(raw.get("scope_breadth"), default=4, low=0, high=4)
+            dependency_count = _to_int(raw.get("dependency_count"), default=4, low=0, high=4)
+            ambiguity = _to_int(raw.get("ambiguity"), default=4, low=0, high=4)
+            testability = _to_int(raw.get("testability"), default=0, low=0, high=4)
+            estimated_subtasks = _to_int(raw.get("estimated_subtasks"), default=4, low=1, high=8)
+            confidence = _to_float(raw.get("confidence"), default=0.0, low=0.0, high=1.0)
 
-            by_id: Dict[str, Dict] = {}
-            for item in raw_batch:
-                if isinstance(item, dict) and isinstance(item.get("id"), str):
-                    by_id[item["id"]] = item
+            split_score = scope_breadth + dependency_count + ambiguity + (4 - testability)
 
-            # Node nao batch khong tra ve du thi fallback single
-            for node_id, node in batch:
-                raw_item = by_id.get(node_id)
-                if raw_item is None:
-                    print(f"  -> ⚠️ Node {node_id}: thieu ket qua trong batch, fallback single")
-                    _evaluate_single(node_id, node)
-                    continue
-                _apply_score(node_id, node, raw_item)
+            # Soft signals
+            signal_subtasks = estimated_subtasks >= subtask_threshold
+            signal_score = split_score >= split_score_threshold
+            signal_low_conf = confidence < min_confidence_threshold
+            signal_count = int(signal_subtasks) + int(signal_score) + int(signal_low_conf)
+
+            # Hard split: đủ mạnh thì tách ngay
+            hard_split = (
+                split_score >= hard_split_score_threshold
+                or (estimated_subtasks >= hard_subtask_threshold and confidence >= min_confidence_threshold)
+            )
+
+            # Quyết định cuối
+            should_split = hard_split or (signal_count >= 2)
+            node["status"] = "NEED_SPLIT" if should_split else "READY"
+
+            print(
+                f"  -> Node {node_id}: status={node['status']} | "
+                f"split_score={split_score}, subtasks={estimated_subtasks}, conf={confidence:.2f}, "
+                f"signals(subtasks={signal_subtasks}, score={signal_score}, low_conf={signal_low_conf}, count={signal_count}), "
+                f"hard_split={hard_split}"
+            )
 
         except Exception as e:
-            print(f"  -> ⚠️ Batch {i//batch_size + 1} loi ({str(e)}), fallback single toan batch")
-            for node_id, node in batch:
-                _evaluate_single(node_id, node)
+            node["status"] = "NEED_SPLIT"
+            print(f"  -> ⚠️ Node {node_id}: loi ({str(e)}) => NEED_SPLIT")
 
     return {"tree_store": tree_store}
 
@@ -268,33 +200,8 @@ def decompose_layer_node(state: TreeBacklogState) -> Dict:
     tree_store = dict(state["tree_store"])
     active_ids = state["active_node_ids"]
     max_n = int(state["max_children_n"])
-    batch_size = max(1, int( state.get("batch_size", 5)))
 
-    print(f"\n[INFO] Decompose layer với {len(active_ids)} node, batch_size={batch_size}")
-
-    batch_prompt = ChatPromptTemplate.from_messages([
-        ("system", (
-            "You are a Business Analyst.\n"
-            "Return ONLY a valid JSON array, no markdown, no explanations.\n"
-            "Each output item must correspond to one input node by id, using this schema:\n"
-            "{{\n"
-            "  \"id\": str,\n"
-            "  \"children\": [\n"
-            "    {{\"short_title\": str, \"content\": str}}\n"
-            "  ]\n"
-            "}}\n"
-            "Constraints:\n"
-            "- You must return one output item for each input id.\n"
-            "- children must be direct child requirements.\n"
-            "- Minimum number of children is 2.\n"
-            "- Maximum number of children is {max_n}.\n"
-            "- If decomposition is not possible, return children as [] for that id."
-        )),
-        ("user", (
-            "--- NODES TO DECOMPOSE (JSON ARRAY) ---\n{nodes_json}\n\n"
-            "Return a JSON array that strictly follows the schema."
-        ))
-    ])
+    print(f"\n[INFO] Decompose layer với {len(active_ids)} node.")
 
     single_prompt = ChatPromptTemplate.from_messages([
         ("system", (
@@ -304,7 +211,7 @@ def decompose_layer_node(state: TreeBacklogState) -> Dict:
             "{{\"short_title\": str, \"content\": str}}\n"
             "Constraints:\n"
             "- Maximum number of items is {max_n}.\n"
-            "- Minimum number of children is 2.\n" 
+            "- Minimum number of children is 2.\n"
         )),
         ("user", (
             "--- PARENT CONTEXT MAP ---\n{context}\n\n"
@@ -312,7 +219,6 @@ def decompose_layer_node(state: TreeBacklogState) -> Dict:
             "Decompose this into direct child requirements."
         ))
     ])
-    batch_chain = batch_prompt | llm | JsonOutputParser()
     single_chain = single_prompt | llm | JsonOutputParser()
 
     next_layer_ids: List[str] = []
@@ -359,21 +265,6 @@ def decompose_layer_node(state: TreeBacklogState) -> Dict:
         next_layer_ids.extend(children_ids)
         print(f"  -> Node {node_id} da be thanh: {children_ids}")
 
-    def _decompose_single(node_id: str, node: RequirementNode) -> None:
-        context_str = get_compact_context(node["context_path"])
-        try:
-            raw_children = single_chain.invoke({
-                "context": context_str,
-                "content": node["content"],
-                "max_n": max_n
-            })
-            children = _normalize_children(raw_children)
-            _materialize_children(node_id, node, children)
-        except Exception as e:
-            print(f"  -> ⚠️ Node {node_id}: single fallback loi ({str(e)})")
-            node["status"] = "READY"
-            node["children_ids"] = []
-
     candidates: List[tuple[str, RequirementNode]] = []
     for node_id in active_ids:
         node = tree_store.get(node_id)
@@ -387,50 +278,21 @@ def decompose_layer_node(state: TreeBacklogState) -> Dict:
         print("[PROCESS] Khong co node NEED_SPLIT trong layer nay.")
         return {"tree_store": tree_store, "active_node_ids": []}
 
-    for i in range(0, len(candidates), batch_size):
-        batch = candidates[i:i + batch_size]
-        payload = []
-        for node_id, node in batch:
-            payload.append({
-                "id": node_id,
-                "context": get_compact_context(node["context_path"]),
-                "content": node["content"]
-            })
-
+    for node_id, node in candidates:
+        context_str = get_compact_context(node["context_path"])
         try:
-            raw_batch = batch_chain.invoke({
-                "nodes_json": json.dumps(payload, ensure_ascii=False),
+            raw_children = single_chain.invoke({
+                "context": context_str,
+                "content": node["content"],
                 "max_n": max_n
             })
-
-            if not isinstance(raw_batch, list):
-                raise ValueError("Batch output khong phai JSON array")
-
-            by_id: Dict[str, Dict] = {}
-            for item in raw_batch:
-                if isinstance(item, dict) and isinstance(item.get("id"), str):
-                    by_id[item["id"]] = item
-
-            for node_id, node in batch:
-                row = by_id.get(node_id)
-                if row is None:
-                    print(f"  -> ⚠️ Node {node_id}: batch thieu ket qua, fallback single")
-                    _decompose_single(node_id, node)
-                    continue
-
-                children = _normalize_children(row.get("children"))
-                if not children:
-                    # Neu batch row loi schema hoac children rong, fallback single de tang ti le tach dung
-                    print(f"  -> ⚠️ Node {node_id}: children rong/khong hop le, fallback single")
-                    _decompose_single(node_id, node)
-                    continue
-
-                _materialize_children(node_id, node, children)
-
+            children = _normalize_children(raw_children)
+            _materialize_children(node_id, node, children)
         except Exception as e:
-            print(f"  -> ⚠️ Batch {i // batch_size + 1} loi ({str(e)}), fallback single toan batch")
-            for node_id, node in batch:
-                _decompose_single(node_id, node)
+            # Nếu có lỗi (parsing, LLM error, etc.), coi như không thể phân rã và chuyển thành READY
+            print(f"  -> ⚠️ Node {node_id}: loi ({str(e)}), khong the phan ra => READY")
+            node["status"] = "READY"
+            node["children_ids"] = []
 
     print(f"[PROCESS] Chuyen giao layer tiep theo: {next_layer_ids}")
     return {
@@ -496,7 +358,6 @@ if __name__ == "__main__":
         split_score_threshold = 9,
         min_confidence_threshold = 0.5,
         subtask_threshold = 4,
-        batch_size = 5,
         hard_split_score_threshold = 10,
         hard_subtask_threshold = 6
     )
