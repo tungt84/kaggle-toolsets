@@ -252,77 +252,176 @@ def evaluate_layer_node(state: TreeBacklogState) -> Dict:
 
 
 def decompose_layer_node(state: TreeBacklogState) -> Dict:
-    """CẬP NHẬT: Tính toán và chuyển active_node_ids sang tầng mới ngay tại ĐÂY"""
     tree_store = dict(state["tree_store"])
     active_ids = state["active_node_ids"]
-    max_n = state["max_children_n"]
-    
-    prompt = ChatPromptTemplate.from_messages([
+    max_n = int(state["max_children_n"])
+    batch_size = max(1, int( state.get("batch_size", 5)))
+
+    print(f"\n[INFO] Decompose layer với {len(active_ids)} node, batch_size={batch_size}")
+
+    batch_prompt = ChatPromptTemplate.from_messages([
         ("system", (
-            "Bạn là một Business Analyst. Phản hồi BẮT BUỘC là một JSON Array dạng: "
-            "[{{\"short_title\": \"Tiêu đề con\", \"content\": \"Nội dung chi tiết\"}}, ...]"
+            "Ban la Business Analyst.\n"
+            "Tra ve DUY NHAT JSON array hop le, khong markdown, khong giai thich.\n"
+            "Moi phan tu output ung voi 1 node input theo id, schema:\n"
+            "{{\n"
+            "  \"id\": str,\n"
+            "  \"children\": [\n"
+            "    {{\"short_title\": str, \"content\": str}}\n"
+            "  ]\n"
+            "}}\n"
+            "Rang buoc:\n"
+            "- Phai co output cho moi id trong input.\n"
+            "- children la cac yeu cau con truc tiep.\n"
+            "- So children toi da la {max_n}.\n"
+            "- Neu khong tach duoc, tra children la [] cho id do."
         )),
         ("user", (
-            "--- BẢN ĐỒ NGỮ CẢNH CHA ---\n{context}\n\n"
-            "--- YÊU CẦU CẦN CHIA NHỎ ---\nNội dung: {content}\n\n"
-            "Yêu cầu: Hãy tách thành các yêu cầu con trực tiếp (Tối đa {max_n} mục)."
+            "--- NODES CAN CHIA NHO (JSON ARRAY) ---\n{nodes_json}\n\n"
+            "Hay tra ve JSON array dung schema."
         ))
     ])
-    chain = prompt | llm | JsonOutputParser()
-    
-    next_layer_ids = []
-    
+
+    single_prompt = ChatPromptTemplate.from_messages([
+        ("system", (
+            "Ban la Business Analyst.\n"
+            "Tra ve DUY NHAT JSON array hop le, khong markdown, khong giai thich.\n"
+            "Schema moi phan tu:\n"
+            "{{\"short_title\": str, \"content\": str}}\n"
+            "So phan tu toi da la {max_n}."
+        )),
+        ("user", (
+            "--- BAN DO NGU CANH CHA ---\n{context}\n\n"
+            "--- YEU CAU CAN CHIA NHO ---\nNoi dung: {content}\n\n"
+            "Hay tach thanh cac yeu cau con truc tiep."
+        ))
+    ])
+
+    batch_chain = batch_prompt | llm | JsonOutputParser()
+    single_chain = single_prompt | llm | JsonOutputParser()
+
+    next_layer_ids: List[str] = []
+
+    def _normalize_children(children_raw) -> List[Dict[str, str]]:
+        if not isinstance(children_raw, list):
+            return []
+        cleaned: List[Dict[str, str]] = []
+        for item in children_raw[:max_n]:
+            if not isinstance(item, dict):
+                continue
+            short_title = str(item.get("short_title", "")).strip()
+            content = str(item.get("content", "")).strip()
+            if short_title and content:
+                cleaned.append({"short_title": short_title, "content": content})
+        return cleaned
+
+    def _materialize_children(node_id: str, node: RequirementNode, children: List[Dict[str, str]]) -> None:
+        if not children:
+            node["status"] = "READY"
+            node["children_ids"] = []
+            return
+
+        children_ids: List[str] = []
+        new_context_path = node["context_path"] + [{"id": node["id"], "short_title": node["short_title"]}]
+        current_depth = node.get("depth", 0)
+
+        for index, child in enumerate(children):
+            child_id = f"{node_id}.{index + 1}"
+            children_ids.append(child_id)
+
+            tree_store[child_id] = RequirementNode(
+                id=child_id,
+                parent_id=node_id,
+                short_title=child["short_title"],
+                content=child["content"],
+                context_path=new_context_path,
+                status="PENDING",
+                children_ids=[],
+                depth=current_depth + 1
+            )
+
+        node["children_ids"] = children_ids
+        next_layer_ids.extend(children_ids)
+        print(f"  -> Node {node_id} da be thanh: {children_ids}")
+
+    def _decompose_single(node_id: str, node: RequirementNode) -> None:
+        context_str = get_compact_context(node["context_path"])
+        try:
+            raw_children = single_chain.invoke({
+                "context": context_str,
+                "content": node["content"],
+                "max_n": max_n
+            })
+            children = _normalize_children(raw_children)
+            _materialize_children(node_id, node, children)
+        except Exception as e:
+            print(f"  -> ⚠️ Node {node_id}: single fallback loi ({str(e)})")
+            node["status"] = "READY"
+            node["children_ids"] = []
+
+    candidates: List[tuple[str, RequirementNode]] = []
     for node_id in active_ids:
         node = tree_store.get(node_id)
         if not node:
             continue
-            
-        if node["status"] != "NEED_SPLIT":
+        if node.get("status") != "NEED_SPLIT":
             continue
-            
-        context_str = get_compact_context(node["context_path"])
+        candidates.append((node_id, node))
+
+    if not candidates:
+        print("[PROCESS] Khong co node NEED_SPLIT trong layer nay.")
+        return {"tree_store": tree_store, "active_node_ids": []}
+
+    for i in range(0, len(candidates), batch_size):
+        batch = candidates[i:i + batch_size]
+        payload = []
+        for node_id, node in batch:
+            payload.append({
+                "id": node_id,
+                "context": get_compact_context(node["context_path"]),
+                "content": node["content"]
+            })
+
         try:
-            children_data = chain.invoke({"context": context_str, "content": node["content"], "max_n": max_n})
-            
-            if not children_data:
-                node["status"] = "READY"
-                continue
-                
-            children_ids = []
-            new_context_path = node["context_path"] + [{"id": node["id"], "short_title": node["short_title"]}]
-            current_depth = node.get("depth", 0)
-            
-            for index, child in enumerate(children_data):
-                child_id = f"{node_id}.{index + 1}"
-                children_ids.append(child_id)
-                
-                tree_store[child_id] = RequirementNode(
-                    id=child_id,
-                    parent_id=node_id,
-                    short_title=child["short_title"],
-                    content=child["content"],
-                    context_path=new_context_path,
-                    status="PENDING",
-                    children_ids=[],
-                    depth=current_depth + 1
-                )
-            
-            node["children_ids"] = children_ids
-            next_layer_ids.extend(children_ids) # Gom các ID con vào tầng tiếp theo
-            print(f"  -> Node {node_id} đã bẻ thành các nút con: {children_ids}")
-            
+            raw_batch = batch_chain.invoke({
+                "nodes_json": json.dumps(payload, ensure_ascii=False),
+                "max_n": max_n
+            })
+
+            if not isinstance(raw_batch, list):
+                raise ValueError("Batch output khong phai JSON array")
+
+            by_id: Dict[str, Dict] = {}
+            for item in raw_batch:
+                if isinstance(item, dict) and isinstance(item.get("id"), str):
+                    by_id[item["id"]] = item
+
+            for node_id, node in batch:
+                row = by_id.get(node_id)
+                if row is None:
+                    print(f"  -> ⚠️ Node {node_id}: batch thieu ket qua, fallback single")
+                    _decompose_single(node_id, node)
+                    continue
+
+                children = _normalize_children(row.get("children"))
+                if not children:
+                    # Neu batch row loi schema hoac children rong, fallback single de tang ti le tach dung
+                    print(f"  -> ⚠️ Node {node_id}: children rong/khong hop le, fallback single")
+                    _decompose_single(node_id, node)
+                    continue
+
+                _materialize_children(node_id, node, children)
+
         except Exception as e:
-            print(f"⚠️ Lỗi rã nút {node_id}: {str(e)}")
-            node["status"] = "READY"
-            
-    # 🔥 ĐIỂM THAY ĐỔI QUAN TRỌNG: 
-    # Cập nhật danh sách active_node_ids mới ngay trong return của Node để LangGraph lưu vào State!
-    print(f"[PROCESS] Tầng cũ hoàn tất. Chuyển giao danh sách Node mới cho tầng tiếp theo: {next_layer_ids}")
+            print(f"  -> ⚠️ Batch {i // batch_size + 1} loi ({str(e)}), fallback single toan batch")
+            for node_id, node in batch:
+                _decompose_single(node_id, node)
+
+    print(f"[PROCESS] Chuyen giao layer tiep theo: {next_layer_ids}")
     return {
         "tree_store": tree_store,
-        "active_node_ids": next_layer_ids # Ghi đè thành công danh sách mới vào State
+        "active_node_ids": next_layer_ids
     }
-
 # ==========================================
 # 3. ĐIỀU HƯỚNG ĐỒNG (Bây giờ chỉ kiểm tra Có/Không)
 # ==========================================
