@@ -285,7 +285,8 @@ def decompose_layer_node(state: TreeBacklogState) -> Dict:
             "}}\n"
             "Rang buoc:\n"
             "- Phai co output cho moi id trong input.\n"
-            "- children la cac yeu cau con truc tiep.\n"
+            "- Children la cac yeu cau con truc tiep.\n"
+            "- So children it nhat la 2.\n"
             "- So children toi da la {max_n}.\n"
             "- Neu khong tach duoc, tra children la [] cho id do."
         )),
