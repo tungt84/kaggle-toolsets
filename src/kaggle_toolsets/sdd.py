@@ -82,37 +82,61 @@ def evaluate_layer_node(state: TreeBacklogState) -> Dict:
     tree_store = dict(state["tree_store"])
     active_ids = state["active_node_ids"]
     max_depth = state.get("max_tree_depth", 3)
-    
-    # Deterministic thresholds (có thể đưa ra config nếu muốn tuning)
-    split_score_threshold = state.get("split_score_threshold", 8)
-    min_confidence_threshold = state.get("min_confidence_threshold", 0.6)
-    subtask_threshold = state.get("subtask_threshold", 3)
 
-    print(f"\n[INFO] Đang đánh giá Layer gồm các Node: {active_ids}")
+    # Tuning knobs
+    split_score_threshold = state.get("split_score_threshold", 9)
+    min_confidence_threshold = state.get("min_confidence_threshold", 0.5)
+    subtask_threshold = state.get("subtask_threshold", 4)
+    batch_size = max(1, int(state.get("batch_size", 5)))
 
-    prompt = ChatPromptTemplate.from_messages([
+    print(f"\n[INFO] Evaluate layer với {len(active_ids)} node, batch_size={batch_size}")
+
+    # Batch scoring prompt: input là 1 JSON string chứa list nodes
+    batch_prompt = ChatPromptTemplate.from_messages([
         ("system", (
-            "Bạn là bộ chấm điểm backlog item cho team kỹ thuật.\n"
-            "Phải trả về DUY NHẤT 1 JSON object hợp lệ, không markdown, không giải thích.\n"
-            "Schema bắt buộc:\n"
+            "Ban la bo cham diem backlog item cho team ky thuat.\n"
+            "Tra ve DUY NHAT JSON array hop le, khong markdown, khong giai thich.\n"
+            "Moi phan tu trong array co schema:\n"
             "{{\n"
-            "  \"scope_breadth\": int,        # 0-4 (0 rất hẹp, 4 rất rộng)\n"
-            "  \"dependency_count\": int,     # 0-4 (0 độc lập, 4 phụ thuộc nhiều)\n"
-            "  \"ambiguity\": int,            # 0-4 (0 rõ ràng, 4 mơ hồ)\n"
-            "  \"testability\": int,          # 0-4 (0 khó test độc lập, 4 dễ test)\n"
+            "  \"id\": str,\n"
+            "  \"scope_breadth\": int,        # 0-4\n"
+            "  \"dependency_count\": int,     # 0-4\n"
+            "  \"ambiguity\": int,            # 0-4\n"
+            "  \"testability\": int,          # 0-4\n"
             "  \"estimated_subtasks\": int,   # 1-8\n"
             "  \"confidence\": float          # 0.0-1.0\n"
             "}}\n"
-            "Nguyên tắc chấm: ưu tiên thực dụng để triển khai coding ngay."
+            "Quy tac: phai co 1 phan tu output cho moi node input, giu nguyen id."
         )),
         ("user", (
-            "--- BẢN ĐỒ NGỮ CẢNH CHA ---\n{context}\n\n"
-            "--- YÊU CẦU CẦN ĐÁNH GIÁ ---\nID: {node_id}\nNội dung: {content}\n\n"
-            "Hãy chấm điểm theo schema ở trên."
+            "--- NODES CAN DANH GIA (JSON ARRAY) ---\n{nodes_json}\n\n"
+            "Hay tra ve JSON array dung schema."
         ))
     ])
 
-    chain = prompt | llm | JsonOutputParser()
+    # Single fallback prompt: dung khi batch parse loi
+    single_prompt = ChatPromptTemplate.from_messages([
+        ("system", (
+            "Ban la bo cham diem backlog item cho team ky thuat.\n"
+            "Tra ve DUY NHAT 1 JSON object hop le, khong markdown, khong giai thich.\n"
+            "Schema:\n"
+            "{{\n"
+            "  \"scope_breadth\": int,\n"
+            "  \"dependency_count\": int,\n"
+            "  \"ambiguity\": int,\n"
+            "  \"testability\": int,\n"
+            "  \"estimated_subtasks\": int,\n"
+            "  \"confidence\": float\n"
+            "}}\n"
+        )),
+        ("user", (
+            "--- CONTEXT ---\n{context}\n\n"
+            "--- NODE ---\nID: {node_id}\nNoi dung: {content}\n"
+        ))
+    ])
+
+    batch_chain = batch_prompt | llm | JsonOutputParser()
+    single_chain = single_prompt | llm | JsonOutputParser()
 
     def _to_int(value, default, low, high):
         try:
@@ -128,61 +152,101 @@ def evaluate_layer_node(state: TreeBacklogState) -> Dict:
             v = default
         return max(low, min(high, v))
 
-    for node_id in active_ids:
-        node = tree_store.get(node_id)
-        if not node:
-            continue
+    def _apply_score(node_id: str, node: RequirementNode, raw: Dict) -> None:
+        if not isinstance(raw, dict):
+            node["status"] = "NEED_SPLIT"
+            print(f"  -> ⚠️ Node {node_id}: raw khong phai object => NEED_SPLIT")
+            return
 
-        if node.get("depth", 0) >= max_depth:
-            print(f"  -> 🛑 Node {node_id} đạt giới hạn độ sâu ({node['depth']}). Ép trạng thái READY.")
-            node["status"] = "READY"
-            continue
+        scope_breadth = _to_int(raw.get("scope_breadth"), default=4, low=0, high=4)
+        dependency_count = _to_int(raw.get("dependency_count"), default=4, low=0, high=4)
+        ambiguity = _to_int(raw.get("ambiguity"), default=4, low=0, high=4)
+        testability = _to_int(raw.get("testability"), default=0, low=0, high=4)
+        estimated_subtasks = _to_int(raw.get("estimated_subtasks"), default=4, low=1, high=8)
+        confidence = _to_float(raw.get("confidence"), default=0.0, low=0.0, high=1.0)
 
+        split_score = scope_breadth + dependency_count + ambiguity + (4 - testability)
+
+        should_split = (
+            estimated_subtasks >= subtask_threshold
+            or split_score >= split_score_threshold
+            or confidence < min_confidence_threshold
+        )
+
+        node["status"] = "NEED_SPLIT" if should_split else "READY"
+
+        print(
+            f"  -> Node {node_id}: status={node['status']} | "
+            f"split_score={split_score}, subtasks={estimated_subtasks}, conf={confidence:.2f}, "
+            f"s={scope_breadth}, d={dependency_count}, a={ambiguity}, t={testability}"
+        )
+
+    def _evaluate_single(node_id: str, node: RequirementNode) -> None:
         context_str = get_compact_context(node["context_path"])
-
         try:
-            raw = chain.invoke({
+            raw = single_chain.invoke({
                 "context": context_str,
                 "node_id": node_id,
                 "content": node["content"],
             })
+            _apply_score(node_id, node, raw)
+        except Exception as e:
+            node["status"] = "NEED_SPLIT"
+            print(f"  -> ⚠️ Node {node_id}: single fallback loi ({str(e)}) => NEED_SPLIT")
 
-            # Validation shape: nếu không phải object thì fail-safe NEED_SPLIT
-            if not isinstance(raw, dict):
-                node["status"] = "NEED_SPLIT"
-                print(f"  -> ⚠️ Node {node_id}: JSON không hợp lệ (không phải object) => NEED_SPLIT")
-                continue
+    # Loc cac node can evaluate
+    candidates = []
+    for node_id in active_ids:
+        node = tree_store.get(node_id)
+        if not node:
+            continue
+        if node.get("depth", 0) >= max_depth:
+            node["status"] = "READY"
+            print(f"  -> 🛑 Node {node_id} dat gioi han do sau ({node['depth']}) => READY")
+            continue
+        candidates.append((node_id, node))
 
-            scope_breadth = _to_int(raw.get("scope_breadth"), default=4, low=0, high=4)
-            dependency_count = _to_int(raw.get("dependency_count"), default=4, low=0, high=4)
-            ambiguity = _to_int(raw.get("ambiguity"), default=4, low=0, high=4)
-            testability = _to_int(raw.get("testability"), default=0, low=0, high=4)
-            estimated_subtasks = _to_int(raw.get("estimated_subtasks"), default=4, low=1, high=8)
-            confidence = _to_float(raw.get("confidence"), default=0.0, low=0.0, high=1.0)
+    if not candidates:
+        return {"tree_store": tree_store}
 
-            # Deterministic score:
-            # Càng rộng/phụ thuộc/mơ hồ thì càng cần split.
-            # testability cao làm giảm nhu cầu split.
-            split_score = scope_breadth + dependency_count + ambiguity + (4 - testability)
+    # Chay batch
+    for i in range(0, len(candidates), batch_size):
+        batch = candidates[i:i + batch_size]
 
-            should_split = (
-                estimated_subtasks >= subtask_threshold
-                or split_score >= split_score_threshold
-                or confidence < min_confidence_threshold
-            )
+        payload = []
+        for node_id, node in batch:
+            payload.append({
+                "id": node_id,
+                "context": get_compact_context(node["context_path"]),
+                "content": node["content"],
+            })
 
-            node["status"] = "NEED_SPLIT" if should_split else "READY"
+        try:
+            raw_batch = batch_chain.invoke({
+                "nodes_json": json.dumps(payload, ensure_ascii=False)
+            })
 
-            print(
-                f"  -> Node {node_id}: status={node['status']} | "
-                f"split_score={split_score}, subtasks={estimated_subtasks}, conf={confidence:.2f}, "
-                f"s={scope_breadth}, d={dependency_count}, a={ambiguity}, t={testability}"
-            )
+            if not isinstance(raw_batch, list):
+                raise ValueError("Batch output khong phai JSON array")
+
+            by_id: Dict[str, Dict] = {}
+            for item in raw_batch:
+                if isinstance(item, dict) and isinstance(item.get("id"), str):
+                    by_id[item["id"]] = item
+
+            # Node nao batch khong tra ve du thi fallback single
+            for node_id, node in batch:
+                raw_item = by_id.get(node_id)
+                if raw_item is None:
+                    print(f"  -> ⚠️ Node {node_id}: thieu ket qua trong batch, fallback single")
+                    _evaluate_single(node_id, node)
+                    continue
+                _apply_score(node_id, node, raw_item)
 
         except Exception as e:
-            # Fail-safe: lỗi parse/invoke thì ưu tiên split thay vì READY
-            node["status"] = "NEED_SPLIT"
-            print(f"  -> ⚠️ Node {node_id}: lỗi evaluate ({str(e)}) => NEED_SPLIT")
+            print(f"  -> ⚠️ Batch {i//batch_size + 1} loi ({str(e)}), fallback single toan batch")
+            for node_id, node in batch:
+                _evaluate_single(node_id, node)
 
     return {"tree_store": tree_store}
 
@@ -317,7 +381,8 @@ if __name__ == "__main__":
         max_tree_depth=10,
         split_score_threshold = 8,
         min_confidence_threshold = 0.6,
-        subtask_threshold = 3
+        subtask_threshold = 3,
+        batch_size = 5
     )
     
     final_output = app.invoke(initial_state)
