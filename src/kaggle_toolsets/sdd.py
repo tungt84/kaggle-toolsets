@@ -54,6 +54,29 @@ Nếu estimated_subtasks >= 3: NEED_SPLIT
 Hoặc nếu split_score >= 8: NEED_SPLIT
 Hoặc nếu confidence < 0.6: NEED_SPLIT
 Ngược lại: READY
+
+Không còn phù hợp hoàn toàn nếu bạn để cây lớn 10x10.
+
+Lý do chính:
+
+Bộ ngưỡng hiện tại ở sdd.py:64, sdd.py:65, sdd.py:66 khá “dễ split”.
+Điều kiện ở sdd.py:146 là OR, nên chỉ cần một tín hiệu là tách.
+Với Qwen 4B, estimated_subtasks thường hay ra 3-5. Ngưỡng 3 làm rất nhiều node bị split liên tục khi max_depth=10 ở sdd.py:295.
+Gợi ý ngưỡng mới để bắt đầu tuning:
+
+split_score_threshold: 9 hoặc 10
+subtask_threshold: 4 (thậm chí 5 nếu vẫn nổ nhánh)
+min_confidence_threshold: 0.5 hoặc 0.45
+Bộ khởi điểm mình khuyên dùng ngay:
+
+split_score_threshold = 9
+min_confidence_threshold = 0.5
+subtask_threshold = 4
+Nếu muốn ổn định hơn nữa, dùng ngưỡng theo depth:
+
+Depth 0-2: score>=8, subtasks>=3, conf<0.6
+Depth 3-6: score>=9, subtasks>=4, conf<0.5
+Depth 7-10: score>=10, subtasks>=5, conf<0.45
 """
 def evaluate_layer_node(state: TreeBacklogState) -> Dict:
     tree_store = dict(state["tree_store"])
