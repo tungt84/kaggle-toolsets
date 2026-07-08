@@ -2,8 +2,8 @@ import json
 from typing import List, Dict, Any, TypedDict, Optional
 
 # Giả định rằng sdd.py nằm cùng cấp và có thể import trực tiếp
-# Nếu không, bạn cần điều chỉnh Python path cho phù hợp.
-from .sdd import RequirementNode, TreeBacklogState, llm
+# Nếu không, bạn cần điều chỉnh Python path cho phù hợp. 
+from kaggle_toolsets.sdd import RequirementNode, TreeBacklogState
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from langgraph.graph import StateGraph, END
@@ -30,6 +30,7 @@ class FeatureExtractionState(TypedDict):
     max_iterations: int
     should_continue: bool
     max_features_per_run: int
+    llm: object # Đối tượng LLM được truyền vào
 
 # ==========================================
 # 2. CÁC HÀM TRÍCH XUẤT ĐẶC TRƯNG
@@ -39,6 +40,7 @@ def extract_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
     """Node trích xuất các đặc trưng ban đầu và quyết định có tiếp tục không."""
     node = state["node"]
     max_features = state["max_features_per_run"]
+    llm = state["llm"]
     print(f"  [Step 1] Node {node['id']}: Extracting initial features (max: {max_features})...")
 
     prompt = ChatPromptTemplate.from_messages([
@@ -68,6 +70,7 @@ def extract_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
 def extract_deeper_features_node(state: FeatureExtractionState) -> Dict[str, Any]:
     """Node trích xuất các đặc trưng chuyên sâu hơn khi được yêu cầu."""
     node = state["node"]
+    llm = state["llm"]
     print(f"  [Step 3] Node {node['id']}: Extracting deeper features...")
 
     prompt = ChatPromptTemplate.from_messages([
@@ -112,36 +115,15 @@ def verify_and_route(state: FeatureExtractionState):
         print("    -> Routing to END.")
         return END
 
-# ==========================================
-# 3. ĐỊNH NGHĨA GRAPH
-# ==========================================
 
-builder = StateGraph(FeatureExtractionState)
-
-builder.add_node("extract_and_decide", extract_and_decide_node)
-builder.add_node("extract_deeper", extract_deeper_features_node)
-
-builder.set_entry_point("extract_and_decide")
-
-builder.add_conditional_edges(
-    "extract_and_decide",
-    verify_and_route,
-    {
-        "extract_deeper": "extract_deeper",
-        END: END
-    }
-)
-# Sau khi đào sâu, luôn kết thúc chu trình cho node này
-builder.add_edge("extract_deeper", END)
-
-# Biên dịch thành một sub-app có thể tái sử dụng
-feature_extraction_sub_app = builder.compile()
 
 # ==========================================
 # 3. HÀM ĐIỀU PHỐI CHÍNH
 # ==========================================
 
 def extract_features_for_tree(
+    feature_extraction_sub_app,
+    llm: object,
     sdd_output: TreeBacklogState, 
     max_iterations: int = 2,
     max_features_per_run: int = 5
@@ -150,6 +132,7 @@ def extract_features_for_tree(
     Hàm chính điều phối việc trích xuất đặc trưng cho mỗi node trong cây.
 
     Args:
+        llm: Đối tượng LLM để sử dụng cho việc trích xuất.
         sdd_output: Trạng thái cuối cùng từ việc chạy `sdd.app`.
         max_iterations: Số lần lặp tối đa cho quy trình trích xuất sâu.
         max_features_per_run: Số lượng feature tối đa trích xuất trong một lần gọi LLM.
@@ -185,7 +168,8 @@ def extract_features_for_tree(
                 "iteration_count": 0,
                 "max_iterations": max_iterations,
                 "should_continue": True,
-                "max_features_per_run": max_features_per_run
+                "max_features_per_run": max_features_per_run,
+                "llm": llm
             })
             # Cập nhật lại node trong store chính từ trạng thái cuối cùng của graph
             enriched_tree_store[node_id] = final_state["node"]
@@ -230,4 +214,4 @@ def print_enriched_tree(
 
     if node.get("children_ids"):
         for child_id in node["children_ids"]:
-            print_enriched_tree(., child_id, indent + "  ")
+            print_enriched_tree(enriched_tree_store, child_id, indent + "  ")

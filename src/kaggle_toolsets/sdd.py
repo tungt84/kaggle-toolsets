@@ -2,9 +2,7 @@ import json
 from typing import List, Dict, Optional, TypedDict
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
-from .llm_config import llm # <<< THAY ĐỔI: Import llm từ file config trung tâm
 
 # ==========================================
 # 1. CẤU TRÚC STATE 
@@ -24,6 +22,7 @@ class TreeBacklogState(TypedDict):
     tree_store: Dict[str, RequirementNode]
     active_node_ids: List[str]
     max_children_n: int
+    llm: object # Đối tượng LLM được truyền vào
     max_tree_depth: int 
 
 
@@ -88,6 +87,7 @@ def evaluate_layer_node( state: TreeBacklogState) -> Dict:
     split_score_threshold = state.get("split_score_threshold", 9)
     min_confidence_threshold = state.get("min_confidence_threshold", 0.5)
     subtask_threshold = state.get("subtask_threshold", 4)
+    llm = state["llm"]
     hard_split_score_threshold = state.get("hard_split_score_threshold", 10)
     hard_subtask_threshold = state.get("hard_subtask_threshold", 6)
 
@@ -201,6 +201,7 @@ def decompose_layer_node( state: TreeBacklogState) -> Dict:
     tree_store = dict(state["tree_store"])
     active_ids = state["active_node_ids"]
     max_n = int(state["max_children_n"])
+    llm = state["llm"]
 
     print(f"\n[INFO] Decompose layer với {len(active_ids)} node.")
 
@@ -314,6 +315,3 @@ def route_next_layer(state: TreeBacklogState):
     
     print("[FINISH] Hàng đợi trống (active_node_ids rỗng). Tất cả các nhánh đã đạt điều kiện dừng.")
     return "finish_tree"
-
-
-
