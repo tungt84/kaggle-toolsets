@@ -79,10 +79,14 @@ def extract_features_node(state: FeatureExtractionState) -> Dict[str, Any]:
     print(f"  [Step {'1' if is_initial_run else '1.x'}] Node {node['id']}: Extracting {'initial' if is_initial_run else 'remaining'} features (max: {max_features})...")
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a senior Business Analyst. Your task is to analyze a requirement and extract its key features. You will be told which features have already been identified.\n"
+        ("system", "You are a senior Business Analyst. Your primary task is to find *new* features for a given requirement that are not already in the provided list.\n\n"
+                   "Key Instructions:\n"
+                   "- **Analyze the `Already identified features` list carefully.**\n"
+                   "- **Your goal is to identify what is MISSING.**\n"
+                   "- **ABSOLUTELY DO NOT repeat any features from the `Already identified features` list.**\n\n"
                    "Return a single JSON object with three keys:\n"
                    "1. `estimated_total_features`: An integer estimating the TOTAL number of features needed to fully describe the requirement.\n"
-                   "2. `features`: A list of feature objects. Each object MUST have a `feature_name` key, along with `feature_value` and `description`. This list must NOT exceed {max_features} items.\n"
+                   "2. `features`: A list of *new* feature objects you discovered. Each object MUST have a `feature_name` key, along with `feature_value` and `description`. This list must NOT exceed {max_features} items.\n"
                    "3. `should_continue`: A boolean. Set this to `true` if your `estimated_total_features` is greater than the number of items in your `features` list, otherwise set it to `false`."),
         ("user", "Requirement: {content}\n\nAlready identified features: {existing_features}")
     ])
