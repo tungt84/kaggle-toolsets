@@ -49,11 +49,11 @@ def _normalize_features(features_raw: Any, source_prompt: str) -> List[Feature]:
     cleaned_features: List[Feature] = []
     for item in features_raw:
         if not isinstance(item, dict):
-            continue
+            continue # Bỏ qua nếu item không phải là dictionary
 
         feature_name = item.get("feature_name")
         if not feature_name or not isinstance(feature_name, str):
-            continue
+            continue # Bỏ qua nếu không có feature_name hoặc nó không phải là chuỗi
 
         item["source_prompt"] = source_prompt
         cleaned_features.append(item)  # type: ignore
