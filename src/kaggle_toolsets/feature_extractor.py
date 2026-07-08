@@ -91,8 +91,8 @@ def extract_deeper_features_node(state: FeatureExtractionState) -> Dict[str, Any
             f["source_prompt"] = "extract_deeper"
         node["features"].extend(features)
         print(f"    -> Extracted {len(features)} additional features.")
-        # Sau khi đào sâu, ta dừng lại ở lần lặp này.
-        return {"node": node, "should_continue": False, "iteration_count": state["iteration_count"] + 1}
+        # Báo hiệu rằng một vòng lặp đã hoàn thành và cần xác minh lại.
+        return {"node": node, "should_continue": True, "iteration_count": state["iteration_count"] + 1}
     except Exception as e:
         print(f"    -> Error in Step 3: {e}. Stopping.")
         node["feature_extraction_status"] = "FAILED"
@@ -245,10 +245,6 @@ def build_feature_extraction_graph() -> StateGraph:
     Returns:
         Một đối tượng StateGraph đại diện cho quy trình trích xuất.
     """
-    # ==========================================
-    # 3. ĐỊNH NGHĨA GRAPH
-    # ==========================================
-
     builder = StateGraph(FeatureExtractionState)
 
     builder.add_node("extract_and_decide", extract_and_decide_node)
@@ -264,7 +260,14 @@ def build_feature_extraction_graph() -> StateGraph:
             END: END
         }
     )
-    # Sau khi đào sâu, luôn kết thúc chu trình cho node này
-    builder.add_edge("extract_deeper", END)
+    # Sau khi đào sâu, quay lại bước xác minh để quyết định có lặp lại không.
+    builder.add_conditional_edges(
+        "extract_deeper",
+        verify_and_route,
+        {
+            "extract_deeper": "extract_deeper", # Cạnh lặp lại
+            END: END
+        }
+    )
 
     return builder
