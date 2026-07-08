@@ -36,6 +36,29 @@ class FeatureExtractionState(TypedDict):
 # 2. CÁC HÀM TRÍCH XUẤT ĐẶC TRƯNG
 # ==========================================
 
+def _normalize_features(features_raw: Any, source_prompt: str) -> List[Feature]:
+    """
+    Xác thực và làm sạch danh sách feature thô từ LLM.
+    - Đảm bảo đầu vào là một danh sách.
+    - Đảm bảo mỗi mục là một dictionary có các key cần thiết.
+    - Bỏ qua các mục không hợp lệ.
+    """
+    if not isinstance(features_raw, list):
+        return []
+
+    cleaned_features: List[Feature] = []
+    for item in features_raw:
+        if not isinstance(item, dict):
+            continue
+
+        feature_name = item.get("feature_name")
+        if not feature_name or not isinstance(feature_name, str):
+            continue
+
+        item["source_prompt"] = source_prompt
+        cleaned_features.append(item)  # type: ignore
+    return cleaned_features
+
 def extract_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
     """Node trích xuất các đặc trưng ban đầu và quyết định có tiếp tục không."""
     node = state["node"]
@@ -55,17 +78,18 @@ def extract_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
 
     try:
         result = chain.invoke({"content": node["content"]})
-        features = result.get("features", [])
-        for f in features:
-            f["source_prompt"] = "extract_and_decide"
-        node["features"].extend(features)
-        should_continue = bool(result.get("should_continue", False))
-        estimated_total = result.get("estimated_total_features", len(features))
         
-        print(f"    -> Extracted {len(features)} features (Estimated total: {estimated_total}). LLM decision to continue: {should_continue}")
+        valid_features = _normalize_features(result.get("features"), "extract_and_decide")
+        node["features"].extend(valid_features)
+        
+        should_continue = bool(result.get("should_continue", False))
+        estimated_total = result.get("estimated_total_features", len(node["features"]))
+        
+        print(f"    -> Extracted {len(valid_features)} features (Estimated total: {estimated_total}). LLM decision to continue: {should_continue}")
         return {"node": node, "should_continue": should_continue, "iteration_count": state["iteration_count"] + 1}
     except Exception as e:
-        print(f"    -> Error in Step 1: {e}. Stopping.")
+        # Ghi log chi tiết hơn khi có lỗi
+        print(f"    -> Error in Step 1: {e}. Raw LLM output might be invalid. Stopping.")
         node["feature_extraction_status"] = "FAILED"
         return {"node": node, "should_continue": False}
 
@@ -93,19 +117,20 @@ def extract_deeper_features_node(state: FeatureExtractionState) -> Dict[str, Any
     existing_features_str = json.dumps([f["feature_name"] for f in node["features"]], indent=2)
     try:
         result = chain.invoke({"content": node["content"], "existing_features": existing_features_str})
-        new_features = result.get("features", [])
-        for f in new_features:
-            f["source_prompt"] = "extract_deeper"
-        node["features"].extend(new_features)
+
+        new_valid_features = _normalize_features(result.get("features"), "extract_deeper")
+        node["features"].extend(new_valid_features)
         
         should_continue = bool(result.get("should_continue", False))
         estimated_total = result.get("estimated_total_features", len(node["features"]))
 
-        print(f"    -> Extracted {len(new_features)} additional features. Total now: {len(node['features'])} (Estimated total: {estimated_total}). LLM decision to continue: {should_continue}")
+        print(f"    -> Extracted {len(new_valid_features)} additional features. Total now: {len(node['features'])} (Estimated total: {estimated_total}). LLM decision to continue: {should_continue}")
         
         return {"node": node, "should_continue": should_continue, "iteration_count": state["iteration_count"] + 1}
     except Exception as e:
-        print(f"    -> Error in Step 3: {e}. Stopping.")
+        # Ghi log chi tiết hơn khi có lỗi, bao gồm cả kết quả thô nếu có thể
+        raw_output_str = f"Raw output: {result}" if 'result' in locals() else "Raw output not available."
+        print(f"    -> Error in Step 3: {e}. {raw_output_str}. Stopping.")
         node["feature_extraction_status"] = "FAILED"
         return {"node": node, "should_continue": False}
 
