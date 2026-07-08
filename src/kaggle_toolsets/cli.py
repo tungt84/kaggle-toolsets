@@ -1,5 +1,5 @@
-from kaggle_toolsets.feature_extractor import FeatureExtractionState, build_feature_extraction_graph, extract_and_decide_node, extract_deeper_features_node, extract_features_for_tree, print_enriched_tree, verify_and_route
-from kaggle_toolsets.sdd import RequirementNode,TreeBacklogState, build_backlog_state_graph, evaluate_layer_node, decompose_layer_node, route_next_layer
+from kaggle_toolsets.feature_extractor import extract_features_for_tree, print_enriched_tree,build_feature_extraction_graph
+from kaggle_toolsets.sdd import RequirementNode, TreeBacklogState, build_backlog_state_graph
 import json
 from typing import List, Dict, Optional, TypedDict
 from langchain_openai import ChatOpenAI
@@ -55,8 +55,9 @@ if __name__ == "__main__":
     print("\n📋 KẾT QUẢ backlog (CẤU TRÚC CÂY YÊU CẦU):")
     print_tree(final_output["tree_store"])
 
-    # Biên dịch thành một sub-app có thể tái sử dụng
+    
     feature_extraction_app = build_feature_extraction_graph().compile()
+
     enriched_tree_store = extract_features_for_tree(feature_extraction_app, llm, final_output, max_iterations=2, max_features_per_run=5)
 
     print("\n📋 KẾT QUẢ features (CẤU TRÚC CÂY YÊU CẦU) :")

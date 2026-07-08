@@ -242,6 +242,8 @@ def extract_features_for_tree(
     if not original_tree_store:
         raise ValueError("Không tìm thấy 'tree_store' trong kết quả đầu vào.")
 
+    
+
     # Chuyển đổi cấu trúc để làm việc
     enriched_tree_store: Dict[str, EnrichedRequirementNode] = {
         node_id: {**node, "features": [], "feature_extraction_status": "PENDING"}
@@ -267,7 +269,8 @@ def extract_features_for_tree(
                 "max_iterations": max_iterations,
                 "should_continue": True,
                 "max_features_per_run": max_features_per_run,
-                "llm": llm
+                "llm": llm,
+                "verification_reasoning": None
             }, {"recursion_limit": 10}) # Thêm recursion_limit để cho phép lặp sâu hơn
             # Cập nhật lại node trong store chính từ trạng thái cuối cùng của graph
             enriched_tree_store[node_id] = final_state["node"]
