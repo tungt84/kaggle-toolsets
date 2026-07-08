@@ -44,14 +44,14 @@ def extract_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
     print(f"  [Step 1] Node {node['id']}: Extracting initial features (max: {max_features})...")
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a senior Business Analyst. Extract key features from the requirement. "
-                   "Return a single JSON object with two keys: 'features' and 'should_continue'. "
-                   "'features' is a list of objects, each with 'feature_name', 'feature_value', 'description'. "
-                   f"'features' list should not exceed {max_features} items. "
-                   "'should_continue' is a boolean indicating if the requirement is complex and needs deeper analysis."),
+        ("system", "You are a senior Business Analyst. Your task is to analyze a requirement and extract its key features.\n"
+                   "Return a single JSON object with three keys:\n"
+                   "1. `estimated_total_features`: An integer estimating the TOTAL number of features needed to fully describe the requirement.\n"
+                   "2. `features`: A list of feature objects you extracted. Each object must have 'feature_name', 'feature_value', 'description'. This list must NOT exceed {max_features} items.\n"
+                   "3. `should_continue`: A boolean. Set this to `true` if your `estimated_total_features` is greater than the number of items in your `features` list, otherwise set it to `false`."),
         ("user", "Requirement: {content}")
     ])
-    chain = prompt | llm | JsonOutputParser()
+    chain = prompt.partial(max_features=max_features) | llm | JsonOutputParser()
 
     try:
         result = chain.invoke({"content": node["content"]})
@@ -60,7 +60,9 @@ def extract_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
             f["source_prompt"] = "extract_and_decide"
         node["features"].extend(features)
         should_continue = bool(result.get("should_continue", False))
-        print(f"    -> Extracted {len(features)} features. Initial decision to continue: {should_continue}")
+        estimated_total = result.get("estimated_total_features", len(features))
+        
+        print(f"    -> Extracted {len(features)} features (Estimated total: {estimated_total}). LLM decision to continue: {should_continue}")
         return {"node": node, "should_continue": should_continue, "iteration_count": state["iteration_count"] + 1}
     except Exception as e:
         print(f"    -> Error in Step 1: {e}. Stopping.")
@@ -99,12 +101,32 @@ def extract_deeper_features_node(state: FeatureExtractionState) -> Dict[str, Any
 def verify_and_route(state: FeatureExtractionState):
     """Cạnh điều hướng: Kiểm tra và quyết định branche tiếp theo."""
     node = state["node"]
+    llm = state["llm"]
+    initial_decision = state["should_continue"]
     print(f"  [Step 2] Node {node['id']}: Verifying decision...")
 
-    # Đơn giản hóa: tin tưởng quyết định từ bước 1 cho lần lặp đầu
-    # Trong thực tế, có thể gọi LLM lần nữa để xác nhận
-    verified_decision = state["should_continue"]
-    print(f"    -> Verified decision to continue: {verified_decision}")
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are a Lead Architect. You will review an initial analysis of a requirement.\n"
+                   "Based on the requirement and the features already extracted, decide if a deeper technical analysis is truly necessary.\n"
+                   "Look for hidden complexities, risks, or non-functional requirements that might have been missed.\n"
+                   "Return a single JSON object with two keys:\n"
+                   "1. `verified_should_continue`: boolean. `true` if deeper analysis is needed, `false` otherwise.\n"
+                   "2. `reasoning`: A brief explanation for your decision."),
+        ("user", "Requirement: {content}\n\nInitial Features Extracted:\n{existing_features}")
+    ])
+    chain = prompt | llm | JsonOutputParser()
+
+    try:
+        existing_features_str = json.dumps(node["features"], indent=2)
+        result = chain.invoke({"content": node["content"], "existing_features": existing_features_str})
+        verified_decision = bool(result.get("verified_should_continue", False))
+        reasoning = result.get("reasoning", "No reasoning provided.")
+        print(f"    -> Verification result: {verified_decision}. Reason: {reasoning}")
+        if initial_decision != verified_decision:
+            print(f"    -> Decision FLIPPED! Initial: {initial_decision}, Verified: {verified_decision}")
+    except Exception as e:
+        print(f"    -> Error during verification: {e}. Stopping this branch.")
+        verified_decision = False
 
     if verified_decision and state["iteration_count"] < state["max_iterations"]:
         print("    -> Routing to deeper extraction.")
