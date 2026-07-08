@@ -315,3 +315,20 @@ def route_next_layer(state: TreeBacklogState):
     
     print("[FINISH] Hàng đợi trống (active_node_ids rỗng). Tất cả các nhánh đã đạt điều kiện dừng.")
     return "finish_tree"
+
+def build_backlog_state_graph() -> StateGraph:
+    workflow = StateGraph(TreeBacklogState) # type: ignore
+    workflow.add_node("evaluate_layer", evaluate_layer_node)
+    workflow.add_node("decompose_layer", decompose_layer_node)
+
+    workflow.set_entry_point("evaluate_layer")
+    workflow.add_edge("evaluate_layer", "decompose_layer")
+    workflow.add_conditional_edges(
+        "decompose_layer",
+        route_next_layer,
+        {
+            "loop_to_evaluate": "evaluate_layer",
+            "finish_tree": END
+        }
+    )
+    return workflow

@@ -1,27 +1,12 @@
-from kaggle_toolsets.feature_extractor import FeatureExtractionState, extract_and_decide_node, extract_deeper_features_node, extract_features_for_tree, print_enriched_tree, verify_and_route
-from kaggle_toolsets.sdd import RequirementNode,TreeBacklogState, evaluate_layer_node, decompose_layer_node, route_next_layer
+from kaggle_toolsets.feature_extractor import FeatureExtractionState, build_feature_extraction_graph, extract_and_decide_node, extract_deeper_features_node, extract_features_for_tree, print_enriched_tree, verify_and_route
+from kaggle_toolsets.sdd import RequirementNode,TreeBacklogState, build_backlog_state_graph, evaluate_layer_node, decompose_layer_node, route_next_layer
 import json
 from typing import List, Dict, Optional, TypedDict
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 
 
-workflow = StateGraph(TreeBacklogState) # type: ignore
-workflow.add_node("evaluate_layer", evaluate_layer_node)
-workflow.add_node("decompose_layer", decompose_layer_node)
 
-workflow.set_entry_point("evaluate_layer")
-workflow.add_edge("evaluate_layer", "decompose_layer")
-workflow.add_conditional_edges(
-    "decompose_layer",
-    route_next_layer,
-    {
-        "loop_to_evaluate": "evaluate_layer",
-        "finish_tree": END
-    }
-)
-
-app = workflow.compile()
 if __name__ == "__main__":
     # Khởi tạo LLM ở đây, tại điểm bắt đầu của ứng dụng
     llm = ChatOpenAI(base_url="http://localhost:8000/v1", model="Qwen/Qwen3-4B-Instruct-2507", api_key="dummy", temperature=0.1, max_tokens=2048)
@@ -52,8 +37,8 @@ if __name__ == "__main__":
         hard_split_score_threshold = 10,
         hard_subtask_threshold = 6
     ) # type: ignore
-    
-    final_output = app.invoke(initial_state)
+    backlog_app = build_backlog_state_graph().compile()
+    final_output = backlog_app.invoke(initial_state)
     
     def print_tree(tree_store, node_id="1", indent=""):
         node = tree_store.get(node_id)
@@ -70,32 +55,9 @@ if __name__ == "__main__":
     print("\n📋 KẾT QUẢ backlog (CẤU TRÚC CÂY YÊU CẦU):")
     print_tree(final_output["tree_store"])
 
-
-    # ==========================================
-    # 3. ĐỊNH NGHĨA GRAPH
-    # ==========================================
-
-    builder = StateGraph(FeatureExtractionState)
-
-    builder.add_node("extract_and_decide", extract_and_decide_node)
-    builder.add_node("extract_deeper", extract_deeper_features_node)
-
-    builder.set_entry_point("extract_and_decide")
-
-    builder.add_conditional_edges(
-        "extract_and_decide",
-        verify_and_route,
-        {
-            "extract_deeper": "extract_deeper",
-            END: END
-        }
-    )
-    # Sau khi đào sâu, luôn kết thúc chu trình cho node này
-    builder.add_edge("extract_deeper", END)
-
     # Biên dịch thành một sub-app có thể tái sử dụng
-    feature_extraction_sub_app = builder.compile()
-    enriched_tree_store = extract_features_for_tree(feature_extraction_sub_app, llm, final_output, max_iterations=2, max_features_per_run=5)
+    feature_extraction_app = build_feature_extraction_graph().compile()
+    enriched_tree_store = extract_features_for_tree(feature_extraction_app, llm, final_output, max_iterations=2, max_features_per_run=5)
 
     print("\n📋 KẾT QUẢ features (CẤU TRÚC CÂY YÊU CẦU) :")
     print_enriched_tree(enriched_tree_store)

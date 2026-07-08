@@ -122,7 +122,7 @@ def verify_and_route(state: FeatureExtractionState):
 # ==========================================
 
 def extract_features_for_tree(
-    feature_extraction_sub_app,
+    feature_extraction_app,
     llm: object,
     sdd_output: TreeBacklogState, 
     max_iterations: int = 2,
@@ -163,7 +163,7 @@ def extract_features_for_tree(
         print(f"\nProcessing Node: {node_id} ('{node['short_title']}')")
         try:
             # Gọi sub-graph cho từng node
-            final_state = feature_extraction_sub_app.invoke({
+            final_state = feature_extraction_app.invoke({
                 "node": node,
                 "iteration_count": 0,
                 "max_iterations": max_iterations,
@@ -215,3 +215,34 @@ def print_enriched_tree(
     if node.get("children_ids"):
         for child_id in node["children_ids"]:
             print_enriched_tree(enriched_tree_store, child_id, indent + "  ")
+
+def build_feature_extraction_graph() -> StateGraph:
+    """
+    Xây dựng đồ thị trạng thái cho quy trình trích xuất đặc trưng.
+
+    Returns:
+        Một đối tượng StateGraph đại diện cho quy trình trích xuất.
+    """
+    # ==========================================
+    # 3. ĐỊNH NGHĨA GRAPH
+    # ==========================================
+
+    builder = StateGraph(FeatureExtractionState)
+
+    builder.add_node("extract_and_decide", extract_and_decide_node)
+    builder.add_node("extract_deeper", extract_deeper_features_node)
+
+    builder.set_entry_point("extract_and_decide")
+
+    builder.add_conditional_edges(
+        "extract_and_decide",
+        verify_and_route,
+        {
+            "extract_deeper": "extract_deeper",
+            END: END
+        }
+    )
+    # Sau khi đào sâu, luôn kết thúc chu trình cho node này
+    builder.add_edge("extract_deeper", END)
+
+    return builder
