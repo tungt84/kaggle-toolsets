@@ -73,26 +73,37 @@ def extract_deeper_features_node(state: FeatureExtractionState) -> Dict[str, Any
     """Node trích xuất các đặc trưng chuyên sâu hơn khi được yêu cầu."""
     node = state["node"]
     llm = state["llm"]
+    max_features = state["max_features_per_run"]
+    existing_features_count = len(node["features"])
     print(f"  [Step 3] Node {node['id']}: Extracting deeper features...")
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a technical architect. The requirement seems complex. "
-                   "Identify potential risks, non-functional requirements, or technical dependencies. "
-                   "Return a single JSON object with a 'features' key, which is a list of new findings."),
+        ("system", "You are a technical architect performing a deeper analysis. You must find *new* features (like risks, dependencies, non-functional requirements) that were not previously identified.\n"
+                   "Return a single JSON object with three keys:\n"
+                   "1. `estimated_total_features`: An integer estimating the TOTAL number of features needed to fully describe the requirement (including the {existing_features_count} already found).\n"
+                   "2. `features`: A list of *new* feature objects you extracted. This list must NOT exceed {max_features} items.\n"
+                   "3. `should_continue`: A boolean. Set this to `true` if your `estimated_total_features` is greater than the total number of features found so far ({existing_features_count} + new ones), otherwise set it to `false`."),
         ("user", "Requirement: {content}\n\nAlready identified features: {existing_features}")
     ])
-    chain = prompt | llm | JsonOutputParser()
+    chain = prompt.partial(
+        max_features=max_features, 
+        existing_features_count=existing_features_count
+    ) | llm | JsonOutputParser()
 
     existing_features_str = json.dumps([f["feature_name"] for f in node["features"]], indent=2)
     try:
         result = chain.invoke({"content": node["content"], "existing_features": existing_features_str})
-        features = result.get("features", [])
-        for f in features:
+        new_features = result.get("features", [])
+        for f in new_features:
             f["source_prompt"] = "extract_deeper"
-        node["features"].extend(features)
-        print(f"    -> Extracted {len(features)} additional features.")
-        # Báo hiệu rằng một vòng lặp đã hoàn thành và cần xác minh lại.
-        return {"node": node, "should_continue": True, "iteration_count": state["iteration_count"] + 1}
+        node["features"].extend(new_features)
+        
+        should_continue = bool(result.get("should_continue", False))
+        estimated_total = result.get("estimated_total_features", len(node["features"]))
+
+        print(f"    -> Extracted {len(new_features)} additional features. Total now: {len(node['features'])} (Estimated total: {estimated_total}). LLM decision to continue: {should_continue}")
+        
+        return {"node": node, "should_continue": should_continue, "iteration_count": state["iteration_count"] + 1}
     except Exception as e:
         print(f"    -> Error in Step 3: {e}. Stopping.")
         node["feature_extraction_status"] = "FAILED"
