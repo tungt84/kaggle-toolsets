@@ -30,6 +30,7 @@ class FeatureExtractionState(TypedDict):
     max_iterations: int
     should_continue: bool
     max_features_per_run: int
+    verification_reasoning: Optional[str] # Lý do từ bước xác thực
     llm: object # Đối tượng LLM được truyền vào
 
 # ==========================================
@@ -77,8 +78,13 @@ def extract_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
     chain = prompt.partial(max_features=max_features) | llm | JsonOutputParser()
 
     try:
+        # Log prompt đầy đủ
+        rendered_prompt = prompt.format_prompt(max_features=max_features, content=node["content"])
+        print(f"    -> LLM Prompt (extract_and_decide):\n---\n{rendered_prompt.to_string()}\n---")
+
         result = chain.invoke({"content": node["content"]})
-        
+        print(f"    -> LLM Raw Response:\n---\n{json.dumps(result, indent=2, ensure_ascii=False)}\n---")
+
         valid_features = _normalize_features(result.get("features"), "extract_and_decide")
         node["features"].extend(valid_features)
         
@@ -86,7 +92,13 @@ def extract_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
         estimated_total = result.get("estimated_total_features", len(node["features"]))
         
         print(f"    -> Extracted {len(valid_features)} features (Estimated total: {estimated_total}). LLM decision to continue: {should_continue}")
-        return {"node": node, "should_continue": should_continue, "iteration_count": state["iteration_count"] + 1}
+        return {
+            "node": node, 
+            "should_continue": should_continue, 
+            "iteration_count": state["iteration_count"] + 1,
+            # Không có lý do ở bước đầu tiên
+            "verification_reasoning": None 
+        }
     except Exception as e:
         # Ghi log chi tiết hơn khi có lỗi
         print(f"    -> Error in Step 1: {e}. Raw LLM output might be invalid. Stopping.")
@@ -99,15 +111,17 @@ def extract_deeper_features_node(state: FeatureExtractionState) -> Dict[str, Any
     llm = state["llm"]
     max_features = state["max_features_per_run"]
     existing_features_count = len(node["features"])
+    reasoning = state.get("verification_reasoning") or "general complexity"
     print(f"  [Step 3] Node {node['id']}: Extracting deeper features...")
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a technical architect performing a deeper analysis. You must find *new* features (like risks, dependencies, non-functional requirements) that were not previously identified.\n"
+        ("system", "You are a technical architect. A previous review step has identified the need for deeper analysis for the following reason: '{reasoning}'.\n"
+                   "Based on this reason, you must find *new* features (like risks, dependencies, non-functional requirements) that were not previously identified.\n"
                    "Return a single JSON object with three keys:\n"
                    "1. `estimated_total_features`: An integer estimating the TOTAL number of features needed to fully describe the requirement (including the {existing_features_count} already found).\n"
                    "2. `features`: A list of *new* feature objects you extracted. This list must NOT exceed {max_features} items.\n"
                    "3. `should_continue`: A boolean. Set this to `true` if your `estimated_total_features` is greater than the total number of features found so far ({existing_features_count} + new ones), otherwise set it to `false`."),
-        ("user", "Requirement: {content}\n\nAlready identified features: {existing_features}")
+        ("user", "Requirement: {content}\n\nAlready identified features:\n{existing_features}")
     ])
     chain = prompt.partial(
         max_features=max_features, 
@@ -116,8 +130,13 @@ def extract_deeper_features_node(state: FeatureExtractionState) -> Dict[str, Any
 
     existing_features_str = json.dumps([f["feature_name"] for f in node["features"]], indent=2)
     try:
-        result = chain.invoke({"content": node["content"], "existing_features": existing_features_str})
+        # Log prompt đầy đủ
+        rendered_prompt = prompt.format_prompt(reasoning=reasoning, existing_features_count=existing_features_count, max_features=max_features, content=node["content"], existing_features=existing_features_str)
+        print(f"    -> LLM Prompt (extract_deeper):\n---\n{rendered_prompt.to_string()}\n---")
 
+        result = chain.invoke({"content": node["content"], "existing_features": existing_features_str, "reasoning": reasoning})
+        print(f"    -> LLM Raw Response:\n---\n{json.dumps(result, indent=2, ensure_ascii=False)}\n---")
+        
         new_valid_features = _normalize_features(result.get("features"), "extract_deeper")
         node["features"].extend(new_valid_features)
         
@@ -126,7 +145,12 @@ def extract_deeper_features_node(state: FeatureExtractionState) -> Dict[str, Any
 
         print(f"    -> Extracted {len(new_valid_features)} additional features. Total now: {len(node['features'])} (Estimated total: {estimated_total}). LLM decision to continue: {should_continue}")
         
-        return {"node": node, "should_continue": should_continue, "iteration_count": state["iteration_count"] + 1}
+        return {
+            "node": node, 
+            "should_continue": should_continue, 
+            "iteration_count": state["iteration_count"] + 1,
+            "verification_reasoning": reasoning # Giữ lại lý do cho vòng lặp tiếp theo nếu có
+        }
     except Exception as e:
         # Ghi log chi tiết hơn khi có lỗi, bao gồm cả kết quả thô nếu có thể
         raw_output_str = f"Raw output: {result}" if 'result' in locals() else "Raw output not available."
@@ -134,11 +158,11 @@ def extract_deeper_features_node(state: FeatureExtractionState) -> Dict[str, Any
         node["feature_extraction_status"] = "FAILED"
         return {"node": node, "should_continue": False}
 
-def verify_and_route(state: FeatureExtractionState):
-    """Cạnh điều hướng: Kiểm tra và quyết định branche tiếp theo."""
+def verify_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
+    """Node xác thực: Gọi LLM để đánh giá và lưu lại lý do."""
     node = state["node"]
     llm = state["llm"]
-    initial_decision = state["should_continue"]
+    llm_decision = state["should_continue"]
     print(f"  [Step 2] Node {node['id']}: Verifying decision...")
 
     prompt = ChatPromptTemplate.from_messages([
@@ -154,16 +178,34 @@ def verify_and_route(state: FeatureExtractionState):
 
     try:
         existing_features_str = json.dumps(node["features"], indent=2)
+        # Log prompt đầy đủ
+        rendered_prompt = prompt.format_prompt(content=node["content"], existing_features=existing_features_str)
+        print(f"    -> LLM Prompt (verify_and_decide):\n---\n{rendered_prompt.to_string()}\n---")
+
         result = chain.invoke({"content": node["content"], "existing_features": existing_features_str})
+        print(f"    -> LLM Raw Response:\n---\n{json.dumps(result, indent=2, ensure_ascii=False)}\n---")
         verified_decision = bool(result.get("verified_should_continue", False))
         reasoning = result.get("reasoning", "No reasoning provided.")
+        
         print(f"    -> Verification result: {verified_decision}. Reason: {reasoning}")
-        if initial_decision != verified_decision:
-            print(f"    -> Decision FLIPPED! Initial: {initial_decision}, Verified: {verified_decision}")
+        if llm_decision != verified_decision:
+            print(f"    -> Decision FLIPPED! Previous step: {llm_decision}, Verification: {verified_decision}")
+        
+        # Cập nhật state với quyết định và lý do đã được xác thực
+        return {
+            "node": node,
+            "should_continue": verified_decision,
+            "verification_reasoning": reasoning,
+            "iteration_count": state["iteration_count"]
+        }
     except Exception as e:
         print(f"    -> Error during verification: {e}. Stopping this branch.")
-        verified_decision = False
+        return {"node": node, "should_continue": False, "verification_reasoning": str(e)}
 
+def route_after_verification(state: FeatureExtractionState):
+    """Cạnh điều hướng sau khi xác thực."""
+    verified_decision = state["should_continue"]
+    
     if verified_decision and state["iteration_count"] < state["max_iterations"]:
         print("    -> Routing to deeper extraction.")
         return "extract_deeper"
@@ -172,8 +214,6 @@ def verify_and_route(state: FeatureExtractionState):
             print("    -> Max iterations reached.")
         print("    -> Routing to END.")
         return END
-
-
 
 # ==========================================
 # 3. HÀM ĐIỀU PHỐI CHÍNH
@@ -228,7 +268,7 @@ def extract_features_for_tree(
                 "should_continue": True,
                 "max_features_per_run": max_features_per_run,
                 "llm": llm
-            })
+            }, {"recursion_limit": 10}) # Thêm recursion_limit để cho phép lặp sâu hơn
             # Cập nhật lại node trong store chính từ trạng thái cuối cùng của graph
             enriched_tree_store[node_id] = final_state["node"]
             node["feature_extraction_status"] = "COMPLETED"
@@ -284,26 +324,25 @@ def build_feature_extraction_graph() -> StateGraph:
     builder = StateGraph(FeatureExtractionState)
 
     builder.add_node("extract_and_decide", extract_and_decide_node)
+    builder.add_node("verify_and_decide", verify_and_decide_node)
     builder.add_node("extract_deeper", extract_deeper_features_node)
 
     builder.set_entry_point("extract_and_decide")
 
+    # Sau khi trích xuất ban đầu, luôn đi đến bước xác thực
+    builder.add_edge("extract_and_decide", "verify_and_decide")
+
+    # Sau khi xác thực, quyết định đi đâu tiếp theo
     builder.add_conditional_edges(
-        "extract_and_decide",
-        verify_and_route,
+        "verify_and_decide",
+        route_after_verification,
         {
             "extract_deeper": "extract_deeper",
             END: END
         }
     )
-    # Sau khi đào sâu, quay lại bước xác minh để quyết định có lặp lại không.
-    builder.add_conditional_edges(
-        "extract_deeper",
-        verify_and_route,
-        {
-            "extract_deeper": "extract_deeper", # Cạnh lặp lại
-            END: END
-        }
-    )
+
+    # Sau khi đào sâu, quay lại bước xác thực để tạo thành vòng lặp
+    builder.add_edge("extract_deeper", "verify_and_decide")
 
     return builder
