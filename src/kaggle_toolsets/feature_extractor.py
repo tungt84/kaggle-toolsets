@@ -230,4 +230,4 @@ def print_enriched_tree(
 
     if node.get("children_ids"):
         for child_id in node["children_ids"]:
-            print_enriched_tree(enriched_tree_store, child_id, indent + "  ")
+            print_enriched_tree(., child_id, indent + "  ")
