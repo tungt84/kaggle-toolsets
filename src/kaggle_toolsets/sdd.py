@@ -30,7 +30,7 @@ class TreeBacklogState(TypedDict):
 
 def get_compact_context(context_path: List[Dict]) -> str:
     if not context_path:
-        return "Gốc hệ thống (Root)"
+        return "System Root"
     return "\n".join([f" -> [{node['id']}] {node['short_title']}" for node in context_path])
 
 # ==========================================
@@ -97,17 +97,24 @@ def evaluate_layer_node( state: TreeBacklogState) -> Dict:
     # Single fallback prompt: used when batch parsing fails
     single_prompt = ChatPromptTemplate.from_messages([
         ("system", (
-            "You are a backlog item scoring engine for a software engineering team.\n"
-            "Return ONLY one valid JSON object, no markdown, no explanations.\n"
-            "Schema:\n"
-            "{{\n"
+            "You are a backlog item scoring engine for a software engineering team. Your task is to evaluate a requirement based on several criteria.\n"
+            "Return ONLY one valid JSON object with the following schema. Do not include markdown or explanations.\n\n"
+            "--- CRITERIA EXPLANATION ---\n"
+            "- `scope_breadth` (0-4): How wide is the requirement? 0 = a single, isolated function; 4 = a broad feature touching many system parts.\n"
+            "- `dependency_count` (0-4): How many other systems/modules does it depend on? 0 = none; 4 = many complex dependencies.\n"
+            "- `ambiguity` (0-4): How clear are the requirements? 0 = crystal clear, well-defined; 4 = very vague, many unknowns.\n"
+            "- `testability` (0-4): How easy is it to test this feature in isolation? 0 = very difficult to test; 4 = very easy to write unit/integration tests.\n"
+            "- `estimated_subtasks` (1-8): Estimate the number of smaller, concrete engineering tasks needed to complete this. A higher number suggests the item is large and should be split.\n"
+            "- `confidence` (0.0-1.0): Your confidence in this evaluation. 0.0 = pure guess; 1.0 = very high confidence.\n\n"
+            "--- JSON SCHEMA ---\n"
+            "{\n"
             "  \"scope_breadth\": int,\n"
             "  \"dependency_count\": int,\n"
             "  \"ambiguity\": int,\n"
             "  \"testability\": int,\n"
             "  \"estimated_subtasks\": int,\n"
             "  \"confidence\": float\n"
-            "}}\n"
+            "}"
         )),
         ("user", (
             "--- CONTEXT ---\n{context}\n\n"
