@@ -169,7 +169,7 @@ def verify_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
         rendered_prompt = prompt.format_prompt(content=node["content"], existing_features=existing_features_str, count=len(node["features"]), initial_estimate=initial_estimate)
         print(f"    -> LLM Prompt (verify_and_decide):\n---\n{rendered_prompt.to_string()}\n---")
 
-        result = chain.invoke({"content": node["content"], "existing_features": existing_features_str})
+        result = chain.invoke({"content": node["content"], "existing_features": existing_features_str, "count": len(node["features"]), "initial_estimate": initial_estimate})
         print(f"    -> LLM Raw Response:\n---\n{json.dumps(result, indent=2, ensure_ascii=False)}\n---")
         reasoning = result.get("reasoning", "No reasoning provided.")
         
