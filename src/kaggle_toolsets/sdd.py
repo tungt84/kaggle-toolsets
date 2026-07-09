@@ -1,5 +1,6 @@
 import json
 from typing import List, Dict, Optional, TypedDict
+import logging
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from langgraph.graph import StateGraph, END
@@ -91,7 +92,7 @@ def evaluate_layer_node( state: TreeBacklogState) -> Dict:
     hard_split_score_threshold = state.get("hard_split_score_threshold", 10)
     hard_subtask_threshold = state.get("hard_subtask_threshold", 6)
 
-    print(f"\n[INFO] Evaluate layer với {len(active_ids)} node.")
+    logging.info(f"Bắt đầu Evaluate layer với {len(active_ids)} node.")
 
     # Single fallback prompt: used when batch parsing fails
     single_prompt = ChatPromptTemplate.from_messages([
@@ -138,7 +139,7 @@ def evaluate_layer_node( state: TreeBacklogState) -> Dict:
             continue
         if node.get("depth", 0) >= max_depth:
             node["status"] = "READY"
-            print(f"  -> 🛑 Node {node_id} dat gioi han do sau ({node['depth']}) => READY")
+            logging.info(f"Node {node_id} đạt giới hạn độ sâu ({node['depth']}) => READY")
             continue
         candidates.append((node_id, node))
 
@@ -149,12 +150,18 @@ def evaluate_layer_node( state: TreeBacklogState) -> Dict:
     for node_id, node in candidates:
         context_str = get_compact_context(node["context_path"])
         try:
-            raw = single_chain.invoke({
+            invoke_payload = {
                 "context": context_str,
                 "node_id": node_id,
                 "content": node["content"],
-            })
+            }
+            rendered_prompt = single_prompt.format_prompt(**invoke_payload)
+            logging.debug(f"LLM Prompt (evaluate_layer_node) cho node {node_id}:\n---\n{rendered_prompt.to_string()}\n---")
 
+            raw = single_chain.invoke(invoke_payload)
+            
+            logging.debug(f"LLM Raw Response (evaluate_layer_node) cho node {node_id}:\n---\n{json.dumps(raw, indent=2, ensure_ascii=False)}\n---")
+            
             if not isinstance(raw, dict):
                 raise ValueError("LLM output khong phai object")
 
@@ -183,8 +190,8 @@ def evaluate_layer_node( state: TreeBacklogState) -> Dict:
             should_split = hard_split or (signal_count >= 2)
             node["status"] = "NEED_SPLIT" if should_split else "READY"
 
-            print(
-                f"  -> Node {node_id}: status={node['status']} | "
+            logging.info(
+                f"Node {node_id}: status={node['status']} | "
                 f"split_score={split_score}, subtasks={estimated_subtasks}, conf={confidence:.2f}, "
                 f"signals(subtasks={signal_subtasks}, score={signal_score}, low_conf={signal_low_conf}, count={signal_count}), "
                 f"hard_split={hard_split}"
@@ -192,7 +199,7 @@ def evaluate_layer_node( state: TreeBacklogState) -> Dict:
 
         except Exception as e:
             node["status"] = "NEED_SPLIT"
-            print(f"  -> ⚠️ Node {node_id}: loi ({str(e)}) => NEED_SPLIT")
+            logging.warning(f"Node {node_id}: lỗi ({str(e)}) => NEED_SPLIT")
 
     return {"tree_store": tree_store}
 
@@ -203,7 +210,7 @@ def decompose_layer_node( state: TreeBacklogState) -> Dict:
     max_n = int(state["max_children_n"])
     llm = state["llm"]
 
-    print(f"\n[INFO] Decompose layer với {len(active_ids)} node.")
+    logging.info(f"Bắt đầu Decompose layer với {len(active_ids)} node.")
 
     single_prompt = ChatPromptTemplate.from_messages([
         ("system", (
@@ -265,7 +272,7 @@ def decompose_layer_node( state: TreeBacklogState) -> Dict:
 
         node["children_ids"] = children_ids
         next_layer_ids.extend(children_ids)
-        print(f"  -> Node {node_id} da be thanh: {children_ids}")
+        logging.info(f"Node {node_id} đã được phân rã thành: {children_ids}")
 
     candidates: List[tuple[str, RequirementNode]] = []
     for node_id in active_ids:
@@ -277,26 +284,32 @@ def decompose_layer_node( state: TreeBacklogState) -> Dict:
         candidates.append((node_id, node))
 
     if not candidates:
-        print("[PROCESS] Khong co node NEED_SPLIT trong layer nay.")
+        logging.info("Không có node NEED_SPLIT trong layer này.")
         return {"tree_store": tree_store, "active_node_ids": []}
 
     for node_id, node in candidates:
         context_str = get_compact_context(node["context_path"])
         try:
-            raw_children = single_chain.invoke({
+            invoke_payload = {
                 "context": context_str,
                 "content": node["content"],
                 "max_n": max_n
-            })
+            }
+            rendered_prompt = single_prompt.format_prompt(**invoke_payload)
+            logging.debug(f"LLM Prompt (decompose_layer_node) cho node {node_id}:\n---\n{rendered_prompt.to_string()}\n---")
+            
+            raw_children = single_chain.invoke(invoke_payload)
+            logging.debug(f"LLM Raw Response (decompose_layer_node) cho node {node_id}:\n---\n{json.dumps(raw_children, indent=2, ensure_ascii=False)}\n---")
+
             children = _normalize_children(raw_children)
             _materialize_children(node_id, node, children)
         except Exception as e:
             # Nếu có lỗi (parsing, LLM error, etc.), coi như không thể phân rã và chuyển thành READY
-            print(f"  -> ⚠️ Node {node_id}: loi ({str(e)}), khong the phan ra => READY")
+            logging.warning(f"Node {node_id}: lỗi ({str(e)}), không thể phân rã => READY")
             node["status"] = "READY"
             node["children_ids"] = []
 
-    print(f"[PROCESS] Chuyen giao layer tiep theo: {next_layer_ids}")
+    logging.info(f"Chuyển giao layer tiếp theo: {next_layer_ids}")
     return {
         "tree_store": tree_store,
         "active_node_ids": next_layer_ids
@@ -310,10 +323,10 @@ def route_next_layer(state: TreeBacklogState):
     active_ids = state["active_node_ids"]
     
     if active_ids and len(active_ids) > 0:
-        print(f"[LOOP] Phát hiện có {len(active_ids)} node mới. Tiếp tục vòng lặp quay lại Evaluate.")
+        logging.info(f"Phát hiện có {len(active_ids)} node mới. Tiếp tục vòng lặp quay lại Evaluate.")
         return "loop_to_evaluate"
     
-    print("[FINISH] Hàng đợi trống (active_node_ids rỗng). Tất cả các nhánh đã đạt điều kiện dừng.")
+    logging.info("Hàng đợi trống (active_node_ids rỗng). Tất cả các nhánh đã đạt điều kiện dừng.")
     return "finish_tree"
 
 def build_backlog_state_graph() -> StateGraph:

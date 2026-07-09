@@ -2,6 +2,7 @@ from kaggle_toolsets.feature_extractor import extract_features_for_tree, print_e
 from kaggle_toolsets.sdd import RequirementNode, TreeBacklogState, build_backlog_state_graph
 import json
 from typing import List, Dict, Optional, TypedDict
+import logging
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 
@@ -9,6 +10,12 @@ from langgraph.graph import StateGraph, END
 
 if __name__ == "__main__":
     # Khởi tạo LLM ở đây, tại điểm bắt đầu của ứng dụng
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
     llm = ChatOpenAI(base_url="http://localhost:8000/v1", model="Qwen/Qwen3-4B-Instruct-2507", api_key="dummy", temperature=0.1, max_tokens=2048)
 
     initial_tree = {

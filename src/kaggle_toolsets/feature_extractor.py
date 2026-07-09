@@ -1,5 +1,6 @@
 import json
 from typing import List, Dict, Any, TypedDict, Optional
+import logging
 
 # Giả định rằng sdd.py nằm cùng cấp và có thể import trực tiếp
 # Nếu không, bạn cần điều chỉnh Python path cho phù hợp. 
@@ -78,7 +79,7 @@ def extract_features_node(state: FeatureExtractionState) -> Dict[str, Any]:
     max_features = state["max_features_per_run"]
     llm = state["llm"]
     is_initial_run = state["iteration_count"] == 0
-    print(f"  [Step {'1' if is_initial_run else '1.x'}] Node {node['id']}: Extracting {'initial' if is_initial_run else 'remaining'} features (max: {max_features})...")
+    logging.info(f"Node {node['id']}: Bắt đầu trích xuất {'lần đầu' if is_initial_run else 'bổ sung'} (tối đa: {max_features}).")
     
     if is_initial_run:
         # Prompt cho lần chạy đầu tiên, yêu cầu ước tính tổng số features
@@ -110,10 +111,10 @@ def extract_features_node(state: FeatureExtractionState) -> Dict[str, Any]:
         # Log prompt đầy đủ
         existing_features_str = json.dumps([f["feature_name"] for f in node["features"]], indent=2)
         rendered_prompt = prompt.format_prompt(max_features=max_features, content=node["content"], existing_features=existing_features_str)
-        print(f"    -> LLM Prompt (extract_features_node):\n---\n{rendered_prompt.to_string()}\n---")
+        logging.debug(f"LLM Prompt (extract_features_node) cho node {node['id']}:\n---\n{rendered_prompt.to_string()}\n---")
 
         result = chain.invoke({"content": node["content"], "existing_features": existing_features_str})
-        print(f"    -> LLM Raw Response:\n---\n{json.dumps(result, indent=2, ensure_ascii=False)}\n---")
+        logging.debug(f"LLM Raw Response (extract_features_node) cho node {node['id']}:\n---\n{json.dumps(result, indent=2, ensure_ascii=False)}\n---")
 
         valid_features = _normalize_features(result.get("features"), "extract_features")
         node["features"].extend(valid_features)
@@ -127,7 +128,7 @@ def extract_features_node(state: FeatureExtractionState) -> Dict[str, Any]:
             estimated_total = state["estimated_total_features"] # Giữ nguyên giá trị đã được verify
             should_continue = len(node["features"]) < estimated_total
         
-        print(f"    -> Extracted {len(valid_features)} features (Estimated total: {estimated_total}). LLM decision to continue: {should_continue}")
+        logging.info(f"Node {node['id']}: Đã trích xuất {len(valid_features)} features. Ước tính tổng: {estimated_total}. Quyết định tiếp tục: {should_continue}")
         return {
             "node": node, 
             "should_continue": should_continue, 
@@ -138,7 +139,7 @@ def extract_features_node(state: FeatureExtractionState) -> Dict[str, Any]:
         }
     except Exception as e:
         # Ghi log chi tiết hơn khi có lỗi
-        print(f"    -> Error in Step 1: {e}. Raw LLM output might be invalid. Stopping.")
+        logging.error(f"Node {node['id']}: Lỗi trong bước trích xuất: {e}. Dừng lại.")
         node["feature_extraction_status"] = "FAILED"
         return {"node": node, "should_continue": False}
 
@@ -149,7 +150,7 @@ def verify_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
     llm = state["llm"]
     # Quyết định từ bước trích xuất trước đó
     extraction_decision = state["should_continue"]
-    print(f"  [Step 2] Node {node['id']}: Verifying decision. Initial estimate: {initial_estimate} features.")
+    logging.info(f"Node {node['id']}: Bắt đầu xác thực. Ước tính ban đầu: {initial_estimate} features.")
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", "You are a Lead Architect. You will review an initial analysis of a requirement.\n"
@@ -167,10 +168,10 @@ def verify_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
         existing_features_str = json.dumps(node["features"], indent=2)
         # Log prompt đầy đủ
         rendered_prompt = prompt.format_prompt(content=node["content"], existing_features=existing_features_str, count=len(node["features"]), initial_estimate=initial_estimate)
-        print(f"    -> LLM Prompt (verify_and_decide):\n---\n{rendered_prompt.to_string()}\n---")
+        logging.debug(f"LLM Prompt (verify_and_decide) cho node {node['id']}:\n---\n{rendered_prompt.to_string()}\n---")
 
         result = chain.invoke({"content": node["content"], "existing_features": existing_features_str, "count": len(node["features"]), "initial_estimate": initial_estimate})
-        print(f"    -> LLM Raw Response:\n---\n{json.dumps(result, indent=2, ensure_ascii=False)}\n---")
+        logging.debug(f"LLM Raw Response (verify_and_decide) cho node {node['id']}:\n---\n{json.dumps(result, indent=2, ensure_ascii=False)}\n---")
         reasoning = result.get("reasoning", "No reasoning provided.")
         
         # Cập nhật lại tổng số feature ước tính từ Architect
@@ -180,9 +181,9 @@ def verify_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
         have_now = len(node["features"])
         verified_decision = have_now < adjusted_total_features
 
-        print(f"    -> Architect Review: New total estimate: {adjusted_total_features}. Need more features? {verified_decision}. Reason: {reasoning}")
+        logging.info(f"Node {node['id']}: Đánh giá của Architect: Ước tính mới: {adjusted_total_features}. Cần thêm features? {verified_decision}. Lý do: {reasoning}")
         if initial_estimate != adjusted_total_features:
-            print(f"    -> Estimate ADJUSTED! Initial: {initial_estimate}, Architect's: {adjusted_total_features}")
+            logging.info(f"Node {node['id']}: Ước tính đã được ĐIỀU CHỈNH! Ban đầu: {initial_estimate}, Architect: {adjusted_total_features}")
         
         # Cập nhật state với quyết định và lý do đã được xác thực
         return {
@@ -194,12 +195,12 @@ def verify_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
             "verification_completed": True # Đánh dấu đã hoàn thành xác thực
         }
     except Exception as e:
-        print(f"    -> Error during verification: {e}. Stopping this branch.")
+        logging.error(f"Node {node['id']}: Lỗi trong quá trình xác thực: {e}. Dừng nhánh này.")
         return {"node": node, "should_continue": False, "verification_reasoning": str(e), "estimated_total_features": initial_estimate}
 
 def route_after_verification(state: FeatureExtractionState):
     """Cạnh điều hướng sau khi xác thực."""
-    print("    -> Routing after verification...")
+    logging.info("Định tuyến sau khi xác thực...")
     # Logic này được sao chép từ nhánh 'else' của route_before_extraction
     # để xử lý định tuyến sau khi verify xong.
     node = state["node"]
@@ -216,10 +217,10 @@ def route_after_verification(state: FeatureExtractionState):
 def route_before_extraction(state: FeatureExtractionState):
     """Quyết định xem có cần chạy node verify hay không."""
     if not state["verification_completed"]:
-        print("    -> Verification not completed. Routing to verification node.")
+        logging.info("Chưa xác thực. Định tuyến đến node 'verify_and_decide'.")
         return "verify_and_decide"
     else:
-        print("    -> Verification already completed. Routing to final check.")
+        logging.info("Đã xác thực. Định tuyến đến kiểm tra cuối cùng.")
         # Thay vì đi đến một node khác, chúng ta sẽ đánh giá điều kiện ngay tại đây
         # và trả về tên của nhánh tiếp theo.
     node = state["node"]
@@ -227,16 +228,16 @@ def route_before_extraction(state: FeatureExtractionState):
     total_needed = state["estimated_total_features"]
     have_now = len(node["features"])
     if should_continue_after_verification and have_now < total_needed and state["iteration_count"] < state["max_iterations"]:
-        print(f"    -> Condition met to continue. Have {have_now}/{total_needed} features. Routing back to extraction.")
+        logging.info(f"Đủ điều kiện tiếp tục. Hiện có {have_now}/{total_needed} features. Quay lại trích xuất.")
         return "extract_features"
     else:
         if state["iteration_count"] >= state["max_iterations"]:
-            print("    -> Max iterations reached.")
+            logging.info("Đã đạt số lần lặp tối đa.")
         elif not should_continue_after_verification and have_now < total_needed:
-            print("    -> Verification step decided to stop.")
+            logging.info("Bước xác thực đã quyết định dừng lại.")
         else:
-            print(f"    -> Feature goal reached ({have_now}/{total_needed}).")
-        print("    -> Routing to END.")
+            logging.info(f"Đã đạt mục tiêu features ({have_now}/{total_needed}).")
+        logging.info("Định tuyến đến KẾT THÚC.")
         return END
 
 # ==========================================
@@ -280,11 +281,11 @@ def extract_features_for_tree(
         if not node.get("children_ids") and node.get("status") == "READY"
     ]
 
-    print(f"\n[START] Bắt đầu trích xuất đặc trưng cho {len(target_node_ids)} node lá.")
+    logging.info(f"Bắt đầu trích xuất đặc trưng cho {len(target_node_ids)} node lá.")
 
     for node_id in target_node_ids:
         node = enriched_tree_store[node_id]
-        print(f"\nProcessing Node: {node_id} ('{node['short_title']}')")
+        logging.info(f"Đang xử lý Node: {node_id} ('{node['short_title']}')")
         try:
             # Gọi sub-graph cho từng node
             final_state = feature_extraction_app.invoke({
@@ -301,13 +302,13 @@ def extract_features_for_tree(
             # Cập nhật lại node trong store chính từ trạng thái cuối cùng của graph
             enriched_tree_store[node_id] = final_state["node"]
             node["feature_extraction_status"] = "COMPLETED"
-            print(f"  [DONE] Node {node_id}: Completed with {len(node['features'])} features.")
+            logging.info(f"Node {node_id}: Hoàn thành với {len(node['features'])} features.")
 
         except Exception as e:
-            print(f"  [ERROR] Node {node_id}: Failed during feature extraction. Error: {e}")
+            logging.error(f"Node {node_id}: Thất bại trong quá trình trích xuất. Lỗi: {e}")
             enriched_tree_store[node_id]["feature_extraction_status"] = "FAILED"
 
-    print("\n[FINISH] Hoàn tất quá trình trích xuất đặc trưng cho toàn bộ cây.")
+    logging.info("Hoàn tất quá trình trích xuất đặc trưng cho toàn bộ cây.")
     return enriched_tree_store
 
 # ==========================================
