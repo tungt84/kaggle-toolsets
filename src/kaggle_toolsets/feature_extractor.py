@@ -200,7 +200,18 @@ def verify_and_decide_node(state: FeatureExtractionState) -> Dict[str, Any]:
 def route_after_verification(state: FeatureExtractionState):
     """Cạnh điều hướng sau khi xác thực."""
     print("    -> Routing after verification...")
-    return route_after_extraction(state)
+    # Logic này được sao chép từ nhánh 'else' của route_before_extraction
+    # để xử lý định tuyến sau khi verify xong.
+    node = state["node"]
+    should_continue_after_verification = state["should_continue"]
+    total_needed = state["estimated_total_features"]
+    have_now = len(node["features"])
+    if should_continue_after_verification and have_now < total_needed and state["iteration_count"] < state["max_iterations"]:
+        return "extract_features"
+    else:
+        # Không cần in lại các thông báo vì chúng sẽ được in ở route_before_extraction
+        # trong các vòng lặp tiếp theo. Chỉ cần trả về END.
+        return END
 
 def route_before_extraction(state: FeatureExtractionState):
     """Quyết định xem có cần chạy node verify hay không."""
