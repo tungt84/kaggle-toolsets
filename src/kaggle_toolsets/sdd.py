@@ -107,14 +107,14 @@ def evaluate_layer_node( state: TreeBacklogState) -> Dict:
             "- `estimated_subtasks` (1-8): Estimate the number of smaller, concrete engineering tasks needed to complete this. A higher number suggests the item is large and should be split.\n"
             "- `confidence` (0.0-1.0): Your confidence in this evaluation. 0.0 = pure guess; 1.0 = very high confidence.\n\n"
             "--- JSON SCHEMA ---\n"
-            "{\n"
+            "{{\n"
             "  \"scope_breadth\": int,\n"
             "  \"dependency_count\": int,\n"
             "  \"ambiguity\": int,\n"
             "  \"testability\": int,\n"
             "  \"estimated_subtasks\": int,\n"
             "  \"confidence\": float\n"
-            "}"
+            "}}"
         )),
         ("user", (
             "--- CONTEXT ---\n{context}\n\n"
