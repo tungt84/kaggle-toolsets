@@ -10,12 +10,29 @@ from langgraph.graph import StateGraph, END
 
 if __name__ == "__main__":
     # Khởi tạo LLM ở đây, tại điểm bắt đầu của ứng dụng
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-
+    # --- Cấu hình logging chi tiết ---
+    # 1. Lấy root logger và đặt cấp độ thấp nhất (DEBUG) để bắt tất cả các message
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    
+    # 2. Tạo handler cho console, chỉ hiển thị từ mức INFO trở lên
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    
+    # 3. Tạo handler cho file, ghi lại tất cả từ mức DEBUG trở lên
+    file_handler = logging.FileHandler('app.log', mode='w', encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    
+    # 4. Tạo formatter để định dạng log message
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    
+    # 5. Gán formatter cho các handler
+    console_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+    
+    # 6. Thêm các handler vào root logger
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
     llm = ChatOpenAI(base_url="http://localhost:8000/v1", model="Qwen/Qwen3-4B-Instruct-2507", api_key="dummy", temperature=0.1, max_tokens=2048)
 
     initial_tree = {
