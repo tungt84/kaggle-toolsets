@@ -209,10 +209,8 @@ def route_before_extraction(state: FeatureExtractionState):
         return "verify_and_decide"
     else:
         print("    -> Verification already completed. Routing to final check.")
-        return "route_after_extraction"
-
-def route_after_extraction(state: FeatureExtractionState):
-    """Quyết định cuối cùng: lặp lại extraction hoặc kết thúc."""
+        # Thay vì đi đến một node khác, chúng ta sẽ đánh giá điều kiện ngay tại đây
+        # và trả về tên của nhánh tiếp theo.
     node = state["node"]
     should_continue_after_verification = state["should_continue"]
     total_needed = state["estimated_total_features"]
@@ -223,8 +221,8 @@ def route_after_extraction(state: FeatureExtractionState):
     else:
         if state["iteration_count"] >= state["max_iterations"]:
             print("    -> Max iterations reached.")
-        elif not should_continue_after_verification:
-            print("    -> LLM decided to stop.")
+        elif not should_continue_after_verification and have_now < total_needed:
+            print("    -> Verification step decided to stop.")
         else:
             print(f"    -> Feature goal reached ({have_now}/{total_needed}).")
         print("    -> Routing to END.")
@@ -345,8 +343,6 @@ def build_feature_extraction_graph() -> StateGraph:
 
     builder.add_node("extract_features", extract_features_node)
     builder.add_node("verify_and_decide", verify_and_decide_node)
-    # Thêm node định tuyến ảo để không bị lỗi thiếu node
-    builder.add_node("route_after_extraction", route_after_extraction)
 
     builder.set_entry_point("extract_features")
 
@@ -356,16 +352,15 @@ def build_feature_extraction_graph() -> StateGraph:
         route_before_extraction,
         {
             "verify_and_decide": "verify_and_decide",
-            "route_after_extraction": "route_after_extraction"
+            # Các nhánh trả về từ route_before_extraction khi đã verify xong
+            "extract_features": "extract_features",
+            END: END
         }
     )
-    # Sau khi verify, đi đến điểm quyết định cuối cùng
-    builder.add_edge("verify_and_decide", "route_after_extraction")
-    # Từ điểm quyết định cuối, lặp lại hoặc kết thúc
+    # Sau khi verify, quyết định lặp lại hoặc kết thúc
     builder.add_conditional_edges(
-        "route_after_extraction",
-        lambda x: x, # Hàm identity để chuyển hướng
         "verify_and_decide",
+        route_after_verification,
         {"extract_features": "extract_features", END: END}
     )
     return builder
