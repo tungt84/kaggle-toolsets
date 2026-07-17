@@ -22,6 +22,7 @@ def install_langgraph_bundle():
     """
     Install the langgraph-bundle package using pip.
     """
+    install_langchain()
     install_langgraph()
     install_langgraph_openai()
     run_command("pip install pydantic -q")
