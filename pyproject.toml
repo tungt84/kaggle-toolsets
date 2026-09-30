@@ -19,6 +19,9 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent"
 ]
+dependencies = [
+  "langchain-core>=0.3"
+]
 
 [project.urls]
 Homepage = "https://github.com/tungt84/kaggle-toolsets"
