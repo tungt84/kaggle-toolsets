@@ -209,6 +209,7 @@ def main():
         api_key="dummy",
         model=args.model,
         temperature=0.2,
+        timeout=60*5,
         model_kwargs={"response_format": {"type": "json_object"}}
     )
 
