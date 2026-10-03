@@ -175,11 +175,18 @@ You MUST return ONLY a valid JSON object matching this schema:
                     break
 
                 # Cập nhật thông tin nhận xét từ bước 2.3.3.2 vào nhan_xet
-                nhan_xet.append({
-                    "iteration": count,
-                    "reason": reason,
-                    "fix_content": fix_content
-                })
+                if not nhan_xet or len(nhan_xet) == 0:
+                    nhan_xet.append({
+                        "iteration": count,
+                        "reason": reason,
+                        "fix_content": fix_content
+                    })
+                else:
+                    nhan_xet[0]={
+                        "iteration": count,
+                        "reason": reason,
+                        "fix_content": fix_content
+                    }
 
                 # 2.3.3.2.2. Nếu cần chỉnh sửa nhưng đã count == max_loop
                 if count == max_loop:
