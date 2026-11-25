@@ -15,7 +15,7 @@ def check_tpu():
 def check_dataset(tag,dataset_name,default_path=None):
     import os
     dataset_path = f"/kaggle/input/{dataset_name}"
-    dataset_path_with_tag = f"/kaggle/input/datasetst/{tag}/{dataset_name}"
+    dataset_path_with_tag = f"/kaggle/input/datasets/{tag}/{dataset_name}"
     if os.path.exists(dataset_path_with_tag):
         return dataset_path_with_tag
     elif os.path.exists(dataset_path):
